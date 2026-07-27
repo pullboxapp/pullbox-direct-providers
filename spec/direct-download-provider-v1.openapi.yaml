@@ -1,7 +1,8 @@
 openapi: 3.1.0
 info:
   title: Pullbox Direct Download Provider Protocol
-  version: 1.0.0-candidate.1
+  version: 1.0.0
+  x-pullbox-protocol-version: direct-download-provider/v1
   description: >-
     Authenticated, stateless discovery and resolution contract for optional
     Pullbox direct-download providers. Providers never receive library paths,

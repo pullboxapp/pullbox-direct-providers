@@ -4,8 +4,7 @@ import os
 
 import httpx
 import pytest
-
-from tests.conftest import resolve_payload, search_payload
+from pullbox_provider_contract.conformance import run_provider_conformance
 
 BASE_URL = os.environ.get("PULLBOX_PROVIDER_BASE_URL")
 TOKEN = os.environ.get("PULLBOX_PROVIDER_TOKEN")
@@ -16,25 +15,15 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _headers() -> dict[str, str]:
-    assert TOKEN is not None
-    return {"Authorization": f"Bearer {TOKEN}"}
-
-
-def test_live_provider_conforms_over_private_network() -> None:
+async def test_live_provider_conforms_over_private_network() -> None:
     assert BASE_URL is not None
+    assert TOKEN is not None
 
-    with httpx.Client(base_url=BASE_URL, timeout=5.0) as client:
-        manifest = client.get("/v1/manifest", headers=_headers())
-        health = client.get("/v1/health", headers=_headers())
-        search = client.post("/v1/search", headers=_headers(), json=search_payload())
-        resolve = client.post("/v1/resolve", headers=_headers(), json=resolve_payload())
+    async with httpx.AsyncClient(base_url=BASE_URL, timeout=5.0) as client:
+        report = await run_provider_conformance(client=client, bearer_token=TOKEN)
 
-    assert manifest.status_code == 200
-    assert manifest.json()["provider_id"] == "pullbox.synthetic"
-    assert health.status_code == 200
-    assert health.json()["process_status"] == "healthy"
-    assert search.status_code == 200
-    assert search.json()["candidates"]
-    assert resolve.status_code == 200
-    assert resolve.json()["artifacts"]
+    assert report.provider_id == "pullbox.synthetic"
+    assert report.negotiated_protocol == "direct-download-provider/v1"
+    assert report.operations == ("manifest", "health", "search", "resolve")
+    assert report.candidate_count > 0
+    assert report.artifact_count > 0

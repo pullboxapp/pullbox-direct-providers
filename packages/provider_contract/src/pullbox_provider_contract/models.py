@@ -9,6 +9,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from pullbox_provider_contract.configuration import validate_configuration_schema
+
 PROTOCOL_VERSION = "direct-download-provider/v1"
 MAX_SEARCH_RESULTS = 100
 
@@ -63,6 +65,12 @@ class ManifestResponse(ContractModel):
     min_pullbox_version: str | None = None
     max_pullbox_version: str | None = None
     build: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("configuration_schema")
+    @classmethod
+    def configuration_must_use_native_controls(cls, value: dict[str, Any]) -> dict[str, Any]:
+        validate_configuration_schema(value)
+        return value
 
 
 DiagnosticScalar = str | int | float | bool | None

@@ -11,6 +11,8 @@ def test_canonical_openapi_declares_only_the_four_provider_operations() -> None:
     document = yaml.safe_load(SPEC_PATH.read_text(encoding="utf-8"))
 
     assert document["openapi"].startswith("3.1.")
+    assert document["info"]["version"] == "1.0.0"
+    assert document["info"]["x-pullbox-protocol-version"] == ("direct-download-provider/v1")
     assert set(document["paths"]) == {
         "/v1/manifest",
         "/v1/health",
