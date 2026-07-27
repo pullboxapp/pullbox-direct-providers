@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import pytest
-from pullbox_provider_contract.models import SearchRequest
+from pullbox_provider_contract.models import (
+    PROTOCOL_VERSION,
+    ResolverProfile,
+    SearchIntent,
+    SearchRequest,
+)
 from pydantic import ValidationError
 
 from tests.conftest import search_payload
@@ -32,3 +38,28 @@ def test_contract_parses_timezone_aware_deadline() -> None:
 def test_contract_rejects_naive_deadline() -> None:
     with pytest.raises(ValidationError):
         SearchRequest.model_validate(search_payload(deadline="2026-07-27T12:00:00"))
+
+
+def test_request_and_resolver_profile_repr_redact_all_secret_material() -> None:
+    profile = ResolverProfile(
+        endpoint="http://resolver:8191",
+        timeout_seconds=60,
+        max_concurrency=1,
+        declared_domains=["source.example"],
+        authentication_headers={"Authorization": "resolver-secret"},
+    )
+    request = SearchRequest(
+        protocol_version=PROTOCOL_VERSION,
+        request_id=uuid4(),
+        deadline=datetime.now(UTC) + timedelta(minutes=1),
+        intent=SearchIntent(series_title="Example", normalized_title="example"),
+        provider_config={"account": "provider-secret"},
+        source_credentials={"member_key": "source-secret"},
+        resolver_profile=profile,
+    )
+
+    representation = repr(request)
+    assert "resolver-secret" not in repr(profile)
+    assert "resolver-secret" not in representation
+    assert "provider-secret" not in representation
+    assert "source-secret" not in representation

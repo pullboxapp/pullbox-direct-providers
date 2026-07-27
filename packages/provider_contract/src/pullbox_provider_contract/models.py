@@ -91,7 +91,7 @@ class ResolverProfile(ContractModel):
     timeout_seconds: float = Field(gt=0, le=300)
     max_concurrency: int = Field(ge=1, le=4)
     declared_domains: list[str]
-    authentication_headers: dict[str, str] = Field(default_factory=dict)
+    authentication_headers: dict[str, str] = Field(default_factory=dict, repr=False)
 
 
 class SearchIntent(ContractModel):
@@ -112,9 +112,9 @@ class DeadlineRequest(ContractModel):
     protocol_version: str
     request_id: UUID
     deadline: datetime
-    provider_config: dict[str, Any] = Field(default_factory=dict)
-    source_credentials: dict[str, str] = Field(default_factory=dict)
-    resolver_profile: ResolverProfile | None = None
+    provider_config: dict[str, Any] = Field(default_factory=dict, repr=False)
+    source_credentials: dict[str, str] = Field(default_factory=dict, repr=False)
+    resolver_profile: ResolverProfile | None = Field(default=None, repr=False)
 
     @field_validator("deadline")
     @classmethod
