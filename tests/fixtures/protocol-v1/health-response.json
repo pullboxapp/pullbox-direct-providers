@@ -1,0 +1,10 @@
+{
+  "protocol_version": "direct-download-provider/v1",
+  "process_status": "healthy",
+  "source_status": "healthy",
+  "message": "Synthetic provider is ready.",
+  "retry_after_seconds": null,
+  "diagnostics": {
+    "fixture": "deterministic"
+  }
+}

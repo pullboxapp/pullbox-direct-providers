@@ -1,0 +1,26 @@
+{
+  "protocol_version": "direct-download-provider/v1",
+  "request_id": "11111111-1111-4111-8111-111111111111",
+  "deadline": "2099-07-27T12:00:00Z",
+  "provider_config": {},
+  "source_credentials": {},
+  "resolver_profile": null,
+  "intent": {
+    "series_title": "Synthetic Adventures",
+    "normalized_title": "synthetic adventures",
+    "alternate_titles": [],
+    "issue_number": "1",
+    "issue_type": "issue",
+    "volume": null,
+    "year": 2026,
+    "publisher": "Pullbox Labs",
+    "language": "en",
+    "preferred_formats": [
+      "cbz"
+    ],
+    "quality_preferences": [
+      "digital"
+    ]
+  },
+  "limit": 20
+}
