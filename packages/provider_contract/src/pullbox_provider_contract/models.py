@@ -175,9 +175,9 @@ class ArtifactCoverage(ContractModel):
 class Mirror(ContractModel):
     mirror_id: str
     host_kind: str
-    share_url: str | None = None
-    final_url: str | None = None
-    source_headers: dict[str, str] = Field(default_factory=dict)
+    share_url: str | None = Field(default=None, repr=False)
+    final_url: str | None = Field(default=None, repr=False)
+    source_headers: dict[str, str] = Field(default_factory=dict, repr=False)
     size_bytes: int | None = Field(default=None, ge=0)
     checksum: str | None = None
     etag: str | None = None

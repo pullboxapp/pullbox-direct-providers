@@ -7,14 +7,16 @@ Optional, separately deployed direct-download discovery providers for
 
 This repository is being prepared for Pullbox v1.1.0. The version-one protocol,
 Python DTO package, compatibility policy, conformance runner, and synthetic
-reference provider are frozen for DD-2. GetComics and Anna's Archive
-implementations are not yet available for production use; they are separate
-DD-6 and DD-7 deliverables.
+reference provider are frozen. The GetComics and Anna's Archive source
+implementations are complete and validated in hardened, private-network test
+containers. Publishing and signing their production images remains a DD-8
+release gate, so operators should not treat source checkouts as released images.
 
-## Planned Providers
+## Source Providers
 
-- GetComics
-- Anna's Archive
+- GetComics: metadata discovery and stateless artifact-route normalization.
+- Anna's Archive: metadata discovery with opt-in member fast-download
+  resolution; a member secret is required only by the resolve operation.
 
 Each provider will run as an independent, stateless OCI service and implement a
 versioned, language-neutral Pullbox provider contract.
@@ -56,11 +58,20 @@ python3.12 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
 make validate
 make docker-conformance
+docker compose -p pullbox-provider-source-smoke \
+  -f docker/compose.providers-test.yml up --build --abort-on-container-exit \
+  --exit-code-from smoke
 ```
 
 `make validate` runs Ruff, strict mypy, unit/conformance tests, and the 90%
 coverage gate. `make docker-conformance` builds the digest-pinned synthetic
 image and proves the protocol over an internal-only Docker network.
+
+The source-provider Compose harness builds both providers, waits for their
+authenticated health checks, and validates manifests over an internal-only
+network. It uses generated test credentials and performs no live source search
+or payload download. Live acceptance probes must remain metadata-only, use
+credentials supplied at runtime, and never persist signed URLs or account data.
 
 CI also builds the synthetic reference image for Linux AMD64 and ARM64 without
 publishing it. Tags matching `synthetic-v*` can publish a signed, multi-arch
@@ -93,6 +104,30 @@ Provider configuration is data, not executable UI. A manifest may declare only
 the allowlisted native control types in the contract. Pullbox validates those
 controls, renders its own settings UI, and rejects provider-supplied HTML,
 JavaScript, or unknown configuration fields.
+
+## Source Provider Behavior
+
+### GetComics
+
+The GetComics provider requires no source-account credential. It searches the
+declared `getcomics.org` domain, resolves release pages into normalized artifact
+groups and mirrors, and fails closed when a layout cannot be parsed safely. It
+tries ordinary HTTP first and uses an operator-configured browser resolver only
+after a recognized challenge. It never downloads or proxies artifact bytes.
+
+### Anna's Archive
+
+The Anna's Archive provider is an explicit opt-in integration. Search is
+limited to the exact supported official domain. Unattended resolution requires
+the user's member fast-download secret; free slow-download automation,
+CAPTCHA bypass, unofficial domains, and payload proxying are not supported.
+
+Pullbox stores the member secret encrypted and sends it only in the active
+`POST /v1/resolve` request. The provider keeps no database or cache and must not
+log the credential, account metadata, or returned signed URL. Authentication,
+quota, source availability, and malformed responses remain distinct failures.
+Opening search-result details must not call resolve because a fast-link request
+may consume source quota.
 
 ## Deployment And Registration
 

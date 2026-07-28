@@ -31,6 +31,8 @@ dev = [
 packages = [
     "packages/provider_contract/src/pullbox_provider_contract",
     "providers/synthetic/src/pullbox_provider_synthetic",
+    "providers/getcomics/src/pullbox_provider_getcomics",
+    "providers/annas_archive/src/pullbox_provider_annas_archive",
 ]
 
 [tool.pytest.ini_options]
@@ -40,7 +42,12 @@ testpaths = ["tests"]
 
 [tool.coverage.run]
 branch = true
-source = ["pullbox_provider_contract", "pullbox_provider_synthetic"]
+source = [
+    "pullbox_provider_contract",
+    "pullbox_provider_synthetic",
+    "pullbox_provider_getcomics",
+    "pullbox_provider_annas_archive",
+]
 
 [tool.coverage.report]
 fail_under = 90
@@ -60,8 +67,15 @@ select = ["E", "F", "I", "UP", "B", "ASYNC", "S", "RUF"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-packages = ["pullbox_provider_contract", "pullbox_provider_synthetic"]
+packages = [
+    "pullbox_provider_contract",
+    "pullbox_provider_synthetic",
+    "pullbox_provider_getcomics",
+    "pullbox_provider_annas_archive",
+]
 mypy_path = [
     "packages/provider_contract/src",
     "providers/synthetic/src",
+    "providers/getcomics/src",
+    "providers/annas_archive/src",
 ]

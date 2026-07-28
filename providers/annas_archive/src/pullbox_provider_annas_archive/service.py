@@ -1,0 +1,262 @@
+"""Stateless Anna's Archive discovery and member fast-download behavior."""
+
+from __future__ import annotations
+
+import asyncio
+import re
+from collections.abc import Awaitable, Callable, Mapping
+from typing import TYPE_CHECKING
+from urllib.parse import urlencode, urlsplit
+
+import httpx
+from pullbox_provider_contract.errors import ProtocolError
+from pullbox_provider_contract.models import (
+    Artifact,
+    ArtifactCoverage,
+    ArtifactRoute,
+    Candidate,
+    Mirror,
+    SearchIntent,
+)
+from pullbox_provider_contract.source_http import fetch_source_html
+
+from pullbox_provider_annas_archive.parser import parse_search_html
+
+if TYPE_CHECKING:
+    from pullbox_provider_contract.models import ResolverProfile
+
+_OFFICIAL_DOMAIN = "https://annas-archive.gd"
+_MD5 = re.compile(r"\A[a-f0-9]{32}\Z")
+_MAX_JSON_BYTES = 256 * 1024
+
+PageFetcher = Callable[..., Awaitable[str]]
+FastDownloadFetcher = Callable[..., Awaitable[tuple[int, dict[str, object]]]]
+
+
+class AnnasArchiveProviderService:
+    """Conservative official-domain search with member-only resolution."""
+
+    def __init__(
+        self,
+        *,
+        page_fetcher: PageFetcher = fetch_source_html,
+        fast_download_fetcher: FastDownloadFetcher | None = None,
+    ) -> None:
+        self._page_fetcher = page_fetcher
+        self._fast_download_fetcher = fast_download_fetcher or _fetch_fast_download
+
+    async def search(
+        self,
+        intent: SearchIntent,
+        *,
+        provider_config: Mapping[str, object],
+        limit: int,
+        resolver_profile: ResolverProfile | None = None,
+    ) -> list[Candidate]:
+        domain = validate_official_domain(str(provider_config.get("domain", _OFFICIAL_DOMAIN)))
+        query = _build_query(intent)
+        params = urlencode([("q", query), ("ext", "cbz"), ("ext", "cbr"), ("ext", "pdf")])
+        html = await self._page_fetcher(
+            f"{domain}/search?{params}",
+            declared_domains=((urlsplit(domain).hostname or ""),),
+            resolver_profile=resolver_profile,
+        )
+        return parse_search_html(
+            html,
+            source_domain=urlsplit(domain).hostname or "annas-archive.gd",
+        )[:limit]
+
+    async def resolve(
+        self,
+        provider_candidate_id: str,
+        *,
+        provider_config: Mapping[str, object],
+        source_credentials: Mapping[str, str],
+    ) -> list[Artifact]:
+        domain = validate_official_domain(str(provider_config.get("domain", _OFFICIAL_DOMAIN)))
+        md5 = _candidate_md5(provider_candidate_id)
+        member_key = source_credentials.get("member_secret_key", "")
+        if not member_key:
+            raise ProtocolError(
+                401,
+                "source_authentication_required",
+                "Anna's Archive member fast-download access is required.",
+            )
+        status, payload = await self._fast_download_fetcher(
+            domain=domain,
+            md5=md5,
+            member_secret_key=member_key,
+        )
+        if status in {401, 403}:
+            raise ProtocolError(
+                401,
+                "source_authentication_required",
+                "Anna's Archive rejected the member fast-download credential.",
+            )
+        if status == 429 or _is_quota_error(payload):
+            raise ProtocolError(
+                429,
+                "source_quota_limited",
+                "Anna's Archive member fast-download quota is unavailable.",
+            )
+        if status not in {200, 204}:
+            raise ProtocolError(503, "source_unavailable", "Anna's Archive resolve failed.")
+        raw_url = payload.get("download_url")
+        if not isinstance(raw_url, str) or not _safe_download_url(raw_url):
+            raise ProtocolError(
+                503,
+                "source_malformed_response",
+                "Anna's Archive returned no safe fast-download URL.",
+            )
+        return [
+            Artifact(
+                artifact_id=f"anna-fast:{md5}",
+                coverage=ArtifactCoverage(issue_ids=[md5]),
+                route=ArtifactRoute.DIRECT_ARTIFACT,
+                mirrors=[
+                    Mirror(
+                        mirror_id=f"anna-fast:{md5}:0",
+                        host_kind="generic_https",
+                        final_url=raw_url,
+                    )
+                ],
+                limitations=["member_fast_download"],
+            )
+        ]
+
+    async def source_available(self) -> bool:
+        try:
+            await self._page_fetcher(
+                _OFFICIAL_DOMAIN,
+                declared_domains=("annas-archive.gd",),
+            )
+        except RuntimeError:
+            return False
+        return True
+
+
+def validate_official_domain(raw_domain: str) -> str:
+    value = raw_domain.strip().rstrip("/")
+    try:
+        parsed = urlsplit(value)
+    except ValueError as exc:
+        raise _domain_error() from exc
+    if (
+        value != _OFFICIAL_DOMAIN
+        or parsed.scheme != "https"
+        or parsed.hostname != "annas-archive.gd"
+        or parsed.username
+        or parsed.password
+        or parsed.port is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise _domain_error()
+    return value
+
+
+async def _fetch_fast_download(
+    *,
+    domain: str,
+    md5: str,
+    member_secret_key: str,
+) -> tuple[int, dict[str, object]]:
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0),
+        follow_redirects=False,
+        trust_env=False,
+        headers={"Accept": "application/json", "User-Agent": "PullboxDirectProvider/0.1"},
+    ) as client:
+        response: httpx.Response | None = None
+        try:
+            response = await client.send(
+                client.build_request(
+                    "GET",
+                    f"{domain}/dyn/api/fast_download.json",
+                    params={"md5": md5, "key": member_secret_key},
+                ),
+                stream=True,
+                follow_redirects=False,
+            )
+            content = await _read_bounded_json(response)
+            try:
+                decoded = httpx.Response(200, content=content).json()
+            except ValueError as exc:
+                raise ProtocolError(
+                    503,
+                    "source_malformed_response",
+                    "Anna's Archive returned invalid JSON.",
+                ) from exc
+            if not isinstance(decoded, dict):
+                raise ProtocolError(
+                    503,
+                    "source_malformed_response",
+                    "Anna's Archive returned invalid JSON.",
+                )
+            return response.status_code, {str(key): value for key, value in decoded.items()}
+        except asyncio.CancelledError:
+            raise
+        except httpx.HTTPError as exc:
+            raise ProtocolError(
+                503,
+                "source_unavailable",
+                "Anna's Archive fast-download request failed.",
+            ) from exc
+        finally:
+            if response is not None:
+                await response.aclose()
+
+
+async def _read_bounded_json(response: httpx.Response) -> bytes:
+    body = bytearray()
+    async for chunk in response.aiter_bytes():
+        body.extend(chunk)
+        if len(body) > _MAX_JSON_BYTES:
+            raise ProtocolError(
+                503,
+                "source_malformed_response",
+                "Anna's Archive response exceeded the supported size limit.",
+            )
+    return bytes(body)
+
+
+def _candidate_md5(candidate_id: str) -> str:
+    value = candidate_id.removeprefix("anna:") if candidate_id.startswith("anna:") else ""
+    if not _MD5.fullmatch(value):
+        raise ProtocolError(404, "candidate_not_found", "Provider candidate was not found.")
+    return value
+
+
+def _build_query(intent: SearchIntent) -> str:
+    parts = [intent.series_title]
+    if intent.issue_number:
+        parts.append(intent.issue_number)
+    if intent.year:
+        parts.append(str(intent.year))
+    return " ".join(parts)[:700]
+
+
+def _safe_download_url(raw_url: str) -> bool:
+    try:
+        parsed = urlsplit(raw_url)
+    except ValueError:
+        return False
+    return bool(
+        parsed.scheme == "https" and parsed.hostname and not parsed.username and not parsed.password
+    )
+
+
+def _is_quota_error(payload: Mapping[str, object]) -> bool:
+    error = payload.get("error")
+    return isinstance(error, str) and any(
+        marker in error.casefold() for marker in ("quota", "downloads remaining", "limit")
+    )
+
+
+def _domain_error() -> ProtocolError:
+    return ProtocolError(
+        422,
+        "invalid_source_domain",
+        "Anna's Archive must use the exact supported official domain.",
+    )
