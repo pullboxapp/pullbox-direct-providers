@@ -118,6 +118,7 @@ class AnnasArchiveProviderService:
                         mirror_id=f"anna-fast:{md5}:0",
                         host_kind="generic_https",
                         final_url=raw_url,
+                        checksum=f"md5:{md5}",
                     )
                 ],
                 limitations=["member_fast_download"],

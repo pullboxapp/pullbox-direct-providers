@@ -64,6 +64,7 @@ async def test_member_search_and_fast_resolve_use_secret_only_for_active_request
 
     assert candidates[0].provider_candidate_id.startswith("anna:")
     assert artifacts[0].mirrors[0].final_url == SIGNED_URL
+    assert artifacts[0].mirrors[0].checksum == "md5:11111111111111111111111111111111"
     assert MEMBER_KEY not in repr(artifacts)
     assert SIGNED_URL not in repr(artifacts)
 
