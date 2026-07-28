@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from pullbox_provider_getcomics.parser import (
     GetComicsLayoutError,
+    extract_source_redirect_links,
     parse_release_html,
     parse_search_html,
 )
@@ -98,3 +99,108 @@ def test_release_parser_fails_closed_without_download_controls() -> None:
             '<html><section class="post-contents"><h2>Example Heroes #7</h2></section></html>',
             source_url="https://getcomics.org/dc/example-heroes-7-2026/",
         )
+
+
+def test_redirect_extraction_skips_intentionally_unsupported_controls() -> None:
+    html = """
+    <html><body><section class="post-contents">
+      <a class="aio-red" title="PIXELDRAIN" href="https://getcomics.org/dls/pixel">Pixel</a>
+      <a class="aio-red" title="VIKINGFILE" href="https://getcomics.org/dls/viking">Viking</a>
+      <a class="aio-red" title="READ ONLINE" href="https://getcomics.org/dls/read">Read</a>
+    </section></body></html>
+    """
+
+    assert extract_source_redirect_links(html, source_domain="getcomics.org") == [
+        "https://getcomics.org/dls/pixel"
+    ]
+
+
+def test_release_parser_uses_all_supported_button_titles_for_opaque_links() -> None:
+    labels = {
+        "PIXELDRAIN": "https://pixeldrain.com/u/pixel",
+        "MEGA": "https://mega.nz/file/mega#key",
+        "ROOTZ": "https://rootz.so/file/rootz",
+        "MEDIAFIRE": "https://www.mediafire.com/file/media/file.cbz",
+        "TERABOX": "https://terabox.link/s/terabox",
+        "DATANODES": "https://datanodes.to/download/data",
+    }
+    links = "".join(
+        f'<a class="aio-red" title="{label}" href="https://getcomics.org/dls/{index}">{label}</a>'
+        for index, label in enumerate(labels)
+    )
+    resolved_links = {
+        f"https://getcomics.org/dls/{index}": destination
+        for index, destination in enumerate(labels.values())
+    }
+
+    html = (
+        '<html><body><section class="post-contents"><p>Example #1</p>'
+        f"{links}</section></body></html>"
+    )
+    artifacts = parse_release_html(
+        html,
+        source_url="https://getcomics.org/dc/example-1/",
+        resolved_links=resolved_links,
+        require_resolved_source_links=True,
+    )
+
+    assert [mirror.host_kind for mirror in artifacts[0].mirrors] == [
+        "pixeldrain",
+        "mega",
+        "rootz",
+        "mediafire",
+        "terabox",
+        "datanodes",
+    ]
+    assert [mirror.share_url for mirror in artifacts[0].mirrors] == list(labels.values())
+
+
+def test_release_parser_rejects_title_destination_mismatch_without_losing_siblings() -> None:
+    pixel_source = "https://getcomics.org/dls/pixel"
+    generic_source = "https://getcomics.org/dls/generic"
+    html = f"""
+    <html><body><section class="post-contents">
+      <p>Example #1</p>
+      <a class="aio-red" title="PIXELDRAIN" href="{pixel_source}">PixelDrain</a>
+      <a class="aio-red" title="DOWNLOAD NOW" href="{generic_source}">Download</a>
+    </section></body></html>
+    """
+
+    artifacts = parse_release_html(
+        html,
+        source_url="https://getcomics.org/dc/example-1/",
+        resolved_links={
+            pixel_source: "https://mega.nz/file/wrong#key",
+            generic_source: "https://files.example.test/example.cbz",
+        },
+        require_resolved_source_links=True,
+    )
+
+    assert len(artifacts[0].mirrors) == 1
+    assert artifacts[0].mirrors[0].host_kind == "generic_https"
+    assert artifacts[0].mirrors[0].share_url == "https://files.example.test/example.cbz"
+
+
+def test_release_parser_keeps_mirror_identity_stable_after_redirect_resolution() -> None:
+    source = "https://getcomics.org/dls/pixel"
+    html = f"""
+    <html><body><section class="post-contents">
+      <p>Example #1</p>
+      <a class="aio-red" title="PIXELDRAIN" href="{source}">PixelDrain</a>
+    </section></body></html>
+    """
+
+    first = parse_release_html(
+        html,
+        source_url="https://getcomics.org/dc/example-1/",
+        resolved_links={source: "https://pixeldrain.com/u/first"},
+        require_resolved_source_links=True,
+    )
+    second = parse_release_html(
+        html,
+        source_url="https://getcomics.org/dc/example-1/",
+        resolved_links={source: "https://pixeldrain.com/u/second"},
+        require_resolved_source_links=True,
+    )
+
+    assert first[0].mirrors[0].mirror_id == second[0].mirrors[0].mirror_id

@@ -7,6 +7,7 @@ import hashlib
 import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from pullbox_provider_contract.comic_parser import parse_comic_title
@@ -21,6 +22,18 @@ from pullbox_provider_contract.models import (
 
 _SIZE = re.compile(r"\bSize\s*:\s*(\d+(?:\.\d+)?)\s*(KB|MB|GB)\b", re.IGNORECASE)
 _IGNORED_TITLES = frozenset({"READ ONLINE", "VIKINGFILE"})
+_HOST_TITLE_KINDS = {
+    "PIXELDRAIN": "pixeldrain",
+    "MEGA": "mega",
+    "MEGANZ": "mega",
+    "ROOTZ": "rootz",
+    "MEDIAFIRE": "mediafire",
+    "TERABOX": "terabox",
+    "DATANODES": "datanodes",
+}
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 
 class GetComicsLayoutError(RuntimeError):
@@ -145,7 +158,13 @@ def parse_search_html(html: str, *, source_domain: str) -> list[Candidate]:
     return candidates
 
 
-def parse_release_html(html: str, *, source_url: str) -> list[Artifact]:
+def parse_release_html(
+    html: str,
+    *,
+    source_url: str,
+    resolved_links: Mapping[str, str | None] | None = None,
+    require_resolved_source_links: bool = False,
+) -> list[Artifact]:
     document = _parse(html)
     if "post-contents" not in document.all_classes:
         raise GetComicsLayoutError("GetComics release layout is no longer recognized.")
@@ -156,7 +175,12 @@ def parse_release_html(html: str, *, source_url: str) -> list[Artifact]:
 
     artifacts: list[Artifact] = []
     for group_index, group in enumerate(groups):
-        mirrors = _normalize_mirrors(group.links, source_url=source_url)
+        mirrors = _normalize_mirrors(
+            group.links,
+            source_url=source_url,
+            resolved_links=resolved_links or {},
+            require_resolved_source_links=require_resolved_source_links,
+        )
         if not mirrors:
             continue
         group_text = " ".join(group.text_parts)
@@ -181,7 +205,27 @@ def parse_release_html(html: str, *, source_url: str) -> list[Artifact]:
     return artifacts
 
 
-def _normalize_mirrors(links: list[_Link], *, source_url: str) -> list[Mirror]:
+def extract_source_redirect_links(html: str, *, source_domain: str) -> list[str]:
+    """Return stable GetComics download-wrapper URLs found in recognized controls."""
+    document = _parse(html)
+    return list(
+        dict.fromkeys(
+            link.href
+            for link in document.links
+            if any(class_name.startswith("aio-") for class_name in link.classes)
+            and (link.title or link.text).strip().upper() not in _IGNORED_TITLES
+            and _is_source_redirect(link.href, source_domain)
+        )
+    )
+
+
+def _normalize_mirrors(
+    links: list[_Link],
+    *,
+    source_url: str,
+    resolved_links: Mapping[str, str | None],
+    require_resolved_source_links: bool,
+) -> list[Mirror]:
     mirrors: list[Mirror] = []
     seen: set[str] = set()
     for link in links:
@@ -189,11 +233,24 @@ def _normalize_mirrors(links: list[_Link], *, source_url: str) -> list[Mirror]:
         if label in _IGNORED_TITLES or not link.href.startswith("https://") or link.href in seen:
             continue
         seen.add(link.href)
+        destination = link.href
+        if _is_source_redirect(link.href, urlsplit(source_url).hostname or ""):
+            if link.href in resolved_links:
+                resolved = resolved_links[link.href]
+                if resolved is None:
+                    continue
+                destination = resolved
+            elif require_resolved_source_links:
+                continue
+        host_kind = _host_kind(destination)
+        title_host_kind = _title_host_kind(label)
+        if title_host_kind is not None and title_host_kind != host_kind:
+            continue
         mirrors.append(
             Mirror(
                 mirror_id=_identity("mirror", f"{source_url}:{link.href}"),
-                host_kind=_host_kind(link.href),
-                share_url=link.href,
+                host_kind=host_kind,
+                share_url=destination,
             )
         )
     return mirrors
@@ -252,13 +309,47 @@ def _host_kind(raw_url: str) -> str:
         ("mega", ("mega.nz", "mega.co.nz")),
         ("rootz", ("rootz.so",)),
         ("mediafire", ("mediafire.com",)),
-        ("terabox", ("terabox.com", "1024terabox.com", "1024tera.com")),
+        (
+            "terabox",
+            (
+                "1024terabox.com",
+                "1024tera.com",
+                "4funbox.com",
+                "dubox.com",
+                "mirrobox.com",
+                "momerybox.com",
+                "terabox.com",
+                "terabox.app",
+                "terabox.link",
+                "teraboxapp.com",
+                "teraboxlink.com",
+                "terasharefile.com",
+            ),
+        ),
         ("datanodes", ("datanodes.to",)),
     )
     for kind, domains in families:
         if any(hostname == domain or hostname.endswith(f".{domain}") for domain in domains):
             return kind
     return "generic_https"
+
+
+def _title_host_kind(label: str) -> str | None:
+    normalized = re.sub(r"[^A-Z0-9]+", "", label.upper())
+    return _HOST_TITLE_KINDS.get(normalized)
+
+
+def _is_source_redirect(raw_url: str, source_domain: str) -> bool:
+    parsed = urlsplit(raw_url)
+    hostname = (parsed.hostname or "").casefold().rstrip(".")
+    expected = source_domain.casefold().rstrip(".")
+    return (
+        parsed.scheme == "https"
+        and hostname == expected
+        and parsed.username is None
+        and parsed.password is None
+        and parsed.path.startswith("/dls/")
+    )
 
 
 def _is_source_url(raw_url: str, source_domain: str) -> bool:

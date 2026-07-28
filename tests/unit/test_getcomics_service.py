@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -20,9 +21,27 @@ class _Pages:
         return (FIXTURES / "search-results.html").read_text(encoding="utf-8")
 
 
+class _Redirects:
+    def __init__(self, destinations: dict[str, str | RuntimeError]) -> None:
+        self.destinations = destinations
+        self.urls: list[str] = []
+
+    async def __call__(self, url: str) -> str:
+        self.urls.append(url)
+        destination = self.destinations[url]
+        if isinstance(destination, RuntimeError):
+            raise destination
+        return destination
+
+
 async def test_service_builds_bounded_search_and_resolves_stateless_candidate() -> None:
     pages = _Pages()
-    service = GetComicsProviderService(page_fetcher=pages)
+    service = GetComicsProviderService(
+        page_fetcher=pages,
+        redirect_resolver=_Redirects(
+            {"https://getcomics.org/dls/opaque-primary": ("https://files.example.test/example.cbz")}
+        ),
+    )
     intent = SearchIntent(
         series_title="Example Heroes",
         normalized_title="example heroes",
@@ -46,3 +65,107 @@ async def test_service_rejects_forged_candidate_identifier() -> None:
 
     with pytest.raises(RuntimeError, match="candidate"):
         await service.resolve("getcomics:not-valid-base64!")
+
+
+async def test_service_unwraps_all_opaque_artifact_host_buttons() -> None:
+    source_urls = {
+        "https://getcomics.org/dls/pixel": "https://pixeldrain.com/u/pixel",
+        "https://getcomics.org/dls/mega": "https://mega.nz/file/mega#key",
+        "https://getcomics.org/dls/rootz": "https://rootz.so/file/rootz",
+        "https://getcomics.org/dls/mediafire": "https://mediafire.com/file/media/file.cbz",
+        "https://getcomics.org/dls/terabox": "https://terabox.link/s/terabox",
+        "https://getcomics.org/dls/datanodes": "https://datanodes.to/download/data",
+    }
+    buttons = "".join(
+        f'<a class="aio-red" title="{label}" href="{source}">{label}</a>'
+        for label, source in zip(
+            ("PIXELDRAIN", "MEGA", "ROOTZ", "MEDIAFIRE", "TERABOX", "DATANODES"),
+            source_urls,
+            strict=True,
+        )
+    )
+
+    async def pages(url: str, **_kwargs: object) -> str:
+        if "/dc/example" in url:
+            return (
+                '<html><body><section class="post-contents"><p>Example #1</p>'
+                f"{buttons}</section></body></html>"
+            )
+        return (FIXTURES / "search-results.html").read_text(encoding="utf-8")
+
+    redirects = _Redirects(source_urls)
+    service = GetComicsProviderService(page_fetcher=pages, redirect_resolver=redirects)
+
+    artifacts = await service.resolve("getcomics:L2RjL2V4YW1wbGUv")
+
+    assert [mirror.host_kind for mirror in artifacts[0].mirrors] == [
+        "pixeldrain",
+        "mega",
+        "rootz",
+        "mediafire",
+        "terabox",
+        "datanodes",
+    ]
+    assert redirects.urls == list(source_urls)
+
+
+async def test_service_drops_failed_opaque_redirect_and_keeps_valid_sibling() -> None:
+    failed = "https://getcomics.org/dls/pixel"
+    valid = "https://getcomics.org/dls/mega"
+
+    async def pages(_url: str, **_kwargs: object) -> str:
+        return f"""
+        <html><body><section class="post-contents">
+          <p>Example #1</p>
+          <a class="aio-red" title="PIXELDRAIN" href="{failed}">PixelDrain</a>
+          <a class="aio-red" title="MEGA" href="{valid}">MEGA</a>
+        </section></body></html>
+        """
+
+    service = GetComicsProviderService(
+        page_fetcher=pages,
+        redirect_resolver=_Redirects(
+            {
+                failed: RuntimeError("redirect unavailable"),
+                valid: "https://mega.nz/file/mega#key",
+            }
+        ),
+    )
+
+    artifacts = await service.resolve("getcomics:L2RjL2V4YW1wbGUv")
+
+    assert [mirror.host_kind for mirror in artifacts[0].mirrors] == ["mega"]
+
+
+async def test_service_bounds_parallel_opaque_redirect_resolution() -> None:
+    sources = [f"https://getcomics.org/dls/{index}" for index in range(8)]
+    buttons = "".join(
+        f'<a class="aio-red" title="DOWNLOAD NOW" href="{source}">Download</a>'
+        for source in sources
+    )
+    active = 0
+    peak = 0
+
+    async def pages(_url: str, **_kwargs: object) -> str:
+        return (
+            '<html><body><section class="post-contents"><p>Example #1</p>'
+            f"{buttons}</section></body></html>"
+        )
+
+    async def redirects(url: str) -> str:
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0)
+        active -= 1
+        return f"https://files.example.test/{url.rsplit('/', 1)[-1]}.cbz"
+
+    service = GetComicsProviderService(
+        page_fetcher=pages,
+        redirect_resolver=redirects,
+    )
+
+    artifacts = await service.resolve("getcomics:L2RjL2V4YW1wbGUv")
+
+    assert len(artifacts[0].mirrors) == len(sources)
+    assert peak == 4

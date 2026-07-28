@@ -10,7 +10,7 @@ from pullbox_provider_contract.resolver import (
     ProviderResolverOutcome,
     ProviderResolverSolution,
 )
-from pullbox_provider_contract.source_http import fetch_source_html
+from pullbox_provider_contract.source_http import fetch_source_html, resolve_source_redirect
 
 
 async def _public_resolver(_host: str, _port: int) -> tuple[str, ...]:
@@ -102,6 +102,65 @@ async def test_challenge_without_profile_and_unsafe_redirect_fail_closed() -> No
         with pytest.raises(RuntimeError, match="resolver"):
             await fetch_source_html(
                 "https://source.example/search",
+                declared_domains=("source.example",),
+                http_client=client,
+                target_resolver=_public_resolver,
+            )
+
+
+async def test_source_redirect_returns_one_safe_https_destination() -> None:
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            302,
+            headers={"location": "https://pixeldrain.com/u/example"},
+            request=request,
+        )
+    )
+    async with httpx.AsyncClient(transport=transport) as client:
+        destination = await resolve_source_redirect(
+            "https://source.example/dls/opaque",
+            declared_domains=("source.example",),
+            http_client=client,
+            target_resolver=_public_resolver,
+        )
+
+    assert destination == "https://pixeldrain.com/u/example"
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        "http://pixeldrain.com/u/example",
+        "https://user:secret@pixeldrain.com/u/example",
+        "/relative-destination",
+    ],
+)
+async def test_source_redirect_rejects_unsafe_destinations(location: str) -> None:
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            302,
+            headers={"location": location},
+            request=request,
+        )
+    )
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(RuntimeError, match="destination"):
+            await resolve_source_redirect(
+                "https://source.example/dls/opaque",
+                declared_domains=("source.example",),
+                http_client=client,
+                target_resolver=_public_resolver,
+            )
+
+
+async def test_source_redirect_rejects_non_redirect_response() -> None:
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(200, text="landing page", request=request)
+    )
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(RuntimeError, match="did not redirect"):
+            await resolve_source_redirect(
+                "https://source.example/dls/opaque",
                 declared_domains=("source.example",),
                 http_client=client,
                 target_resolver=_public_resolver,

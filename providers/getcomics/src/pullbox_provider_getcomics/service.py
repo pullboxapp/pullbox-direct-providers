@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 from collections.abc import Awaitable, Callable
@@ -9,24 +10,36 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlencode
 
 from pullbox_provider_contract.models import Artifact, Candidate, SearchIntent
-from pullbox_provider_contract.source_http import fetch_source_html
+from pullbox_provider_contract.source_http import fetch_source_html, resolve_source_redirect
 
-from pullbox_provider_getcomics.parser import parse_release_html, parse_search_html
+from pullbox_provider_getcomics.parser import (
+    extract_source_redirect_links,
+    parse_release_html,
+    parse_search_html,
+)
 
 if TYPE_CHECKING:
     from pullbox_provider_contract.models import ResolverProfile
 
 _DOMAIN = "getcomics.org"
 _BASE_URL = f"https://{_DOMAIN}"
+_MAX_REDIRECT_CONCURRENCY = 4
 
 PageFetcher = Callable[..., Awaitable[str]]
+RedirectResolver = Callable[[str], Awaitable[str]]
 
 
 class GetComicsProviderService:
     """Search and resolve GetComics pages without durable provider state."""
 
-    def __init__(self, *, page_fetcher: PageFetcher = fetch_source_html) -> None:
+    def __init__(
+        self,
+        *,
+        page_fetcher: PageFetcher = fetch_source_html,
+        redirect_resolver: RedirectResolver | None = None,
+    ) -> None:
         self._page_fetcher = page_fetcher
+        self._redirect_resolver = redirect_resolver or _resolve_getcomics_redirect
 
     async def search(
         self,
@@ -56,7 +69,19 @@ class GetComicsProviderService:
             declared_domains=(_DOMAIN,),
             resolver_profile=resolver_profile,
         )
-        return parse_release_html(html, source_url=source_url)
+        redirect_urls = extract_source_redirect_links(html, source_domain=_DOMAIN)
+        redirect_limiter = asyncio.Semaphore(_MAX_REDIRECT_CONCURRENCY)
+        resolved_links = dict(
+            await asyncio.gather(
+                *(self._resolve_link(url, redirect_limiter) for url in redirect_urls)
+            )
+        )
+        return parse_release_html(
+            html,
+            source_url=source_url,
+            resolved_links=resolved_links,
+            require_resolved_source_links=True,
+        )
 
     async def source_available(self) -> bool:
         try:
@@ -64,6 +89,21 @@ class GetComicsProviderService:
         except RuntimeError:
             return False
         return True
+
+    async def _resolve_link(
+        self,
+        url: str,
+        limiter: asyncio.Semaphore,
+    ) -> tuple[str, str | None]:
+        async with limiter:
+            try:
+                return url, await self._redirect_resolver(url)
+            except RuntimeError:
+                return url, None
+
+
+async def _resolve_getcomics_redirect(url: str) -> str:
+    return await resolve_source_redirect(url, declared_domains=(_DOMAIN,))
 
 
 def _build_query(intent: SearchIntent) -> str:
