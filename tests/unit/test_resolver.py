@@ -13,6 +13,7 @@ from pullbox_provider_contract.resolver import (
     OrdinaryHttpResponse,
     ProviderResolverError,
     ProviderResolverRuntime,
+    _runtime_for_profile,
     detect_browser_challenge,
     resolve_after_challenge,
 )
@@ -37,6 +38,13 @@ def _profile() -> ResolverProfile:
         declared_domains=["source.example"],
         authentication_headers={"Authorization": f"Bearer {AUTH_SECRET}"},
     )
+
+
+def test_resolver_runtime_isolated_by_protocol_mode() -> None:
+    standard = _runtime_for_profile(_profile())
+    trawl = _runtime_for_profile(_profile().model_copy(update={"mode": "trawl_scrape"}))
+
+    assert standard is not trawl
 
 
 def _solution(*, url: str = "https://source.example/comics") -> dict[str, object]:
@@ -148,6 +156,46 @@ async def test_recognized_challenge_calls_standard_v1_once() -> None:
     assert AUTH_SECRET not in repr(_profile())
     assert COOKIE_SECRET not in repr(result)
     assert "not-retained" not in repr(result)
+
+
+async def test_recognized_challenge_calls_trawl_scrape_for_trawl_profile() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "http://resolver:8191/scrape"
+        assert request.headers["Authorization"] == f"Bearer {AUTH_SECRET}"
+        assert json.loads(request.content) == {
+            "url": "https://source.example/comics",
+            "maxTimeout": 60000,
+            "skipHttp": True,
+            "maxTier": 3,
+        }
+        return httpx.Response(
+            200,
+            json={
+                "url": "https://source.example/comics",
+                "statusCode": 200,
+                "html": "<html>TRAWL resolved</html>",
+                "cookies": [],
+                "userAgent": "TRAWL Browser",
+            },
+        )
+
+    profile = _profile().model_copy(update={"mode": "trawl_scrape"})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await resolve_after_challenge(
+            OrdinaryHttpResponse(
+                status_code=503,
+                headers={"server": "cloudflare", "cf-ray": "abc"},
+                body="Just a moment...",
+            ),
+            source_url="https://source.example/comics",
+            profile=profile,
+            http_client=client,
+            target_resolver=_resolve_public,
+        )
+
+    assert result is not None
+    assert result.solution.html == "<html>TRAWL resolved</html>"
+    assert result.solution.user_agent == "TRAWL Browser"
 
 
 @pytest.mark.parametrize(

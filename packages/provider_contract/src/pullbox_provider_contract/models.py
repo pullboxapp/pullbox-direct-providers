@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Self
+from typing import Any, Literal, Self
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -87,7 +87,7 @@ class HealthResponse(ContractModel):
 
 class ResolverProfile(ContractModel):
     endpoint: str
-    mode: str = "flaresolverr_v1"
+    mode: Literal["flaresolverr_v1", "trawl_scrape"] = "flaresolverr_v1"
     timeout_seconds: float = Field(gt=0, le=300)
     max_concurrency: int = Field(ge=1, le=4)
     declared_domains: list[str]

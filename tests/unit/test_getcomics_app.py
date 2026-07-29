@@ -6,6 +6,8 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from pullbox_provider_contract.models import Artifact, Candidate
+from pullbox_provider_contract.resolver import ProviderResolverError
+from pullbox_provider_contract.source_http import BrowserChallengeRequiredError
 from pullbox_provider_getcomics.app import create_app
 
 from tests.conftest import TEST_TOKEN, resolve_payload, search_payload
@@ -139,3 +141,39 @@ async def test_getcomics_health_and_source_errors_are_explicit_and_safe() -> Non
         "message": "GetComics is temporarily unavailable.",
     }
     assert "secret upstream detail" not in failed.text
+
+
+async def test_getcomics_preserves_browser_challenge_classification() -> None:
+    response = await _request(
+        _app(_GetComicsService(error=BrowserChallengeRequiredError())),
+        "POST",
+        "/v1/search",
+        json=search_payload(),
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"] == {
+        "code": "browser_challenge_required",
+        "message": "GetComics requires browser challenge handling.",
+    }
+
+    resolver_failure = await _request(
+        _app(
+            _GetComicsService(
+                error=ProviderResolverError(
+                    "resolver_timed_out",
+                    "secret resolver detail",
+                    retryable=True,
+                )
+            )
+        ),
+        "POST",
+        "/v1/search",
+        json=search_payload(),
+    )
+    assert resolver_failure.status_code == 503
+    assert resolver_failure.json()["error"] == {
+        "code": "resolver_timed_out",
+        "message": "GetComics browser resolver attempt failed.",
+    }
+    assert "secret resolver detail" not in resolver_failure.text

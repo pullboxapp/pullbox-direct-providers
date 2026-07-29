@@ -10,7 +10,11 @@ from pullbox_provider_contract.resolver import (
     ProviderResolverOutcome,
     ProviderResolverSolution,
 )
-from pullbox_provider_contract.source_http import fetch_source_html, resolve_source_redirect
+from pullbox_provider_contract.source_http import (
+    BrowserChallengeRequiredError,
+    fetch_source_html,
+    resolve_source_redirect,
+)
 
 
 async def _public_resolver(_host: str, _port: int) -> tuple[str, ...]:
@@ -99,13 +103,14 @@ async def test_challenge_without_profile_and_unsafe_redirect_fail_closed() -> No
         )
     )
     async with httpx.AsyncClient(transport=challenge) as client:
-        with pytest.raises(RuntimeError, match="resolver"):
+        with pytest.raises(BrowserChallengeRequiredError) as exc_info:
             await fetch_source_html(
                 "https://source.example/search",
                 declared_domains=("source.example",),
                 http_client=client,
                 target_resolver=_public_resolver,
             )
+    assert exc_info.value.code == "browser_challenge_required"
 
 
 async def test_source_redirect_returns_one_safe_https_destination() -> None:

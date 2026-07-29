@@ -28,6 +28,15 @@ _REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
 BrowserResolver = Callable[..., Awaitable[ProviderResolverOutcome | None]]
 
 
+class BrowserChallengeRequiredError(RuntimeError):
+    """Signal that ordinary source HTTP reached a recognized browser challenge."""
+
+    code = "browser_challenge_required"
+
+    def __init__(self) -> None:
+        super().__init__("Browser challenge handling is required.")
+
+
 async def fetch_source_html(
     raw_url: str,
     *,
@@ -78,7 +87,7 @@ async def fetch_source_html(
         )
         if challenge is not None:
             if resolver_profile is None:
-                raise RuntimeError("A browser resolver is required for the source challenge.")
+                raise BrowserChallengeRequiredError
             outcome = await browser_resolver(
                 ordinary,
                 source_url=safe_url,

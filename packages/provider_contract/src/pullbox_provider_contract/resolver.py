@@ -153,7 +153,7 @@ class ProviderResolverRuntime:
                 self._state = "open"
 
 
-_RUNTIMES: dict[tuple[str, int], ProviderResolverRuntime] = {}
+_RUNTIMES: dict[tuple[str, int, str], ProviderResolverRuntime] = {}
 
 
 class _CookieModel(BaseModel):
@@ -180,6 +180,16 @@ class _ResponseModel(BaseModel):
 
     status: str
     solution: _SolutionModel
+
+
+class _TrawlResponseModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    url: str = Field(min_length=1, max_length=4_000)
+    status_code: int = Field(alias="statusCode", ge=100, le=599)
+    html: str = Field(max_length=_MAX_RESPONSE_BYTES)
+    cookies: list[_CookieModel] = Field(default_factory=list, max_length=200)
+    user_agent: str | None = Field(default=None, alias="userAgent", max_length=2_000)
 
 
 def detect_browser_challenge(
@@ -242,17 +252,26 @@ async def resolve_after_challenge(
         profile.declared_domains,
         resolver=target_resolver,
     )
-    endpoint = _resolver_v1_url(profile.endpoint)
+    endpoint = _resolver_operation_url(profile)
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
         **_validated_auth_headers(profile.authentication_headers),
     }
-    payload: dict[str, str | int] = {
-        "cmd": "request.get",
-        "url": target_url,
-        "maxTimeout": round(profile.timeout_seconds * 1000),
-    }
+    payload: dict[str, str | int | bool] = (
+        {
+            "url": target_url,
+            "maxTimeout": round(profile.timeout_seconds * 1000),
+            "skipHttp": True,
+            "maxTier": 3,
+        }
+        if profile.mode == "trawl_scrape"
+        else {
+            "cmd": "request.get",
+            "url": target_url,
+            "maxTimeout": round(profile.timeout_seconds * 1000),
+        }
+    )
     owns_client = http_client is None
     client = http_client or httpx.AsyncClient(
         timeout=httpx.Timeout(
@@ -298,7 +317,7 @@ async def _perform_resolution(
     client: httpx.AsyncClient,
     endpoint: str,
     headers: dict[str, str],
-    payload: dict[str, str | int],
+    payload: dict[str, str | int | bool],
     profile: ResolverProfile,
     challenge: BrowserChallengeKind,
     target_resolver: ProviderTargetResolver | None,
@@ -342,18 +361,33 @@ async def _perform_resolution(
             retryable=result.status_code >= 500,
         )
     try:
-        decoded = _ResponseModel.model_validate(json.loads(content))
+        raw_decoded = json.loads(content)
+        if profile.mode == "trawl_scrape":
+            trawl = _TrawlResponseModel.model_validate(raw_decoded)
+            solution_url = trawl.url
+            solution_status = trawl.status_code
+            solution_html = trawl.html
+            solution_cookies = trawl.cookies
+            solution_user_agent = trawl.user_agent
+        else:
+            decoded = _ResponseModel.model_validate(raw_decoded)
+            if decoded.status != "ok":
+                raise ProviderResolverError(
+                    "resolver_challenge_failed",
+                    "Resolver did not solve the browser challenge.",
+                )
+            solution_url = decoded.solution.url
+            solution_status = decoded.solution.status
+            solution_html = decoded.solution.response
+            solution_cookies = decoded.solution.cookies
+            solution_user_agent = decoded.solution.user_agent
     except (json.JSONDecodeError, UnicodeDecodeError, ValidationError) as exc:
         raise ProviderResolverError(
             "resolver_malformed_response", "Resolver returned an invalid response."
         ) from exc
-    if decoded.status != "ok":
-        raise ProviderResolverError(
-            "resolver_challenge_failed", "Resolver did not solve the browser challenge."
-        )
     try:
         final_url = await _validate_source_url(
-            decoded.solution.url,
+            solution_url,
             profile.declared_domains,
             resolver=target_resolver,
         )
@@ -366,8 +400,8 @@ async def _perform_resolution(
         challenge=challenge,
         solution=ProviderResolverSolution(
             final_url=final_url,
-            status_code=decoded.solution.status,
-            html=decoded.solution.response,
+            status_code=solution_status,
+            html=solution_html,
             cookies=tuple(
                 ProviderResolverCookie(
                     name=cookie.name,
@@ -375,15 +409,15 @@ async def _perform_resolution(
                     domain=cookie.domain,
                     path=cookie.path,
                 )
-                for cookie in decoded.solution.cookies
+                for cookie in solution_cookies
             ),
-            user_agent=decoded.solution.user_agent,
+            user_agent=solution_user_agent,
         ),
     )
 
 
 def _runtime_for_profile(profile: ResolverProfile) -> ProviderResolverRuntime:
-    key = (profile.endpoint, profile.max_concurrency)
+    key = (profile.endpoint, profile.max_concurrency, profile.mode)
     runtime = _RUNTIMES.get(key)
     if runtime is None:
         runtime = ProviderResolverRuntime(max_concurrency=profile.max_concurrency)
@@ -391,7 +425,8 @@ def _runtime_for_profile(profile: ResolverProfile) -> ProviderResolverRuntime:
     return runtime
 
 
-def _resolver_v1_url(raw_endpoint: str) -> str:
+def _resolver_operation_url(profile: ResolverProfile) -> str:
+    raw_endpoint = profile.endpoint
     try:
         parsed = urlsplit(raw_endpoint.strip())
     except ValueError as exc:
@@ -410,7 +445,8 @@ def _resolver_v1_url(raw_endpoint: str) -> str:
         raise ProviderResolverError(
             "resolver_endpoint_rejected", "Resolver endpoint is not a safe service root."
         )
-    return urlunsplit((parsed.scheme, parsed.netloc, "/v1", "", ""))
+    path = "/scrape" if profile.mode == "trawl_scrape" else "/v1"
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
 
 async def _validate_source_url(

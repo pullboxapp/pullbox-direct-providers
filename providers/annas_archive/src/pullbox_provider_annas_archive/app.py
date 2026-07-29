@@ -24,6 +24,8 @@ from pullbox_provider_contract.models import (
     SearchRequest,
     SearchResponse,
 )
+from pullbox_provider_contract.resolver import ProviderResolverError
+from pullbox_provider_contract.source_http import BrowserChallengeRequiredError
 
 from pullbox_provider_annas_archive.service import AnnasArchiveProviderService
 
@@ -128,6 +130,18 @@ def create_app(
                 ),
                 payload.deadline,
             )
+        except BrowserChallengeRequiredError as exc:
+            raise ProtocolError(
+                503,
+                exc.code,
+                "Anna's Archive requires browser challenge handling.",
+            ) from exc
+        except ProviderResolverError as exc:
+            raise ProtocolError(
+                503,
+                exc.code,
+                "Anna's Archive browser resolver attempt failed.",
+            ) from exc
         except RuntimeError as exc:
             raise ProtocolError(
                 503,
@@ -156,6 +170,18 @@ def create_app(
                 ),
                 payload.deadline,
             )
+        except BrowserChallengeRequiredError as exc:
+            raise ProtocolError(
+                503,
+                exc.code,
+                "Anna's Archive requires browser challenge handling.",
+            ) from exc
+        except ProviderResolverError as exc:
+            raise ProtocolError(
+                503,
+                exc.code,
+                "Anna's Archive browser resolver attempt failed.",
+            ) from exc
         except RuntimeError as exc:
             raise ProtocolError(
                 503,

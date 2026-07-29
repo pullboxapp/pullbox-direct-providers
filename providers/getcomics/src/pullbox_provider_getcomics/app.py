@@ -24,6 +24,8 @@ from pullbox_provider_contract.models import (
     SearchRequest,
     SearchResponse,
 )
+from pullbox_provider_contract.resolver import ProviderResolverError
+from pullbox_provider_contract.source_http import BrowserChallengeRequiredError
 
 from pullbox_provider_getcomics.service import GetComicsProviderService
 
@@ -108,6 +110,18 @@ def create_app(
                 ),
                 payload.deadline,
             )
+        except BrowserChallengeRequiredError as exc:
+            raise ProtocolError(
+                503,
+                exc.code,
+                "GetComics requires browser challenge handling.",
+            ) from exc
+        except ProviderResolverError as exc:
+            raise ProtocolError(
+                503,
+                exc.code,
+                "GetComics browser resolver attempt failed.",
+            ) from exc
         except RuntimeError as exc:
             raise ProtocolError(
                 503,
@@ -135,6 +149,18 @@ def create_app(
                 ),
                 payload.deadline,
             )
+        except BrowserChallengeRequiredError as exc:
+            raise ProtocolError(
+                503,
+                exc.code,
+                "GetComics requires browser challenge handling.",
+            ) from exc
+        except ProviderResolverError as exc:
+            raise ProtocolError(
+                503,
+                exc.code,
+                "GetComics browser resolver attempt failed.",
+            ) from exc
         except RuntimeError as exc:
             raise ProtocolError(
                 503,
