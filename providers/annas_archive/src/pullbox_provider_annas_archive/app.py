@@ -27,10 +27,14 @@ from pullbox_provider_contract.models import (
 from pullbox_provider_contract.resolver import ProviderResolverError
 from pullbox_provider_contract.source_http import BrowserChallengeRequiredError
 
-from pullbox_provider_annas_archive.service import AnnasArchiveProviderService
+from pullbox_provider_annas_archive.service import (
+    DEFAULT_OFFICIAL_URL,
+    SUPPORTED_OFFICIAL_DOMAINS,
+    SUPPORTED_OFFICIAL_URLS,
+    AnnasArchiveProviderService,
+)
 
 _VERSION = "0.1.0.dev0"
-_OFFICIAL_DOMAIN = "https://annas-archive.gd"
 
 
 def create_app(
@@ -62,7 +66,7 @@ def create_app(
             homepage_url="https://github.com/pullboxapp/pullbox-direct-providers",
             documentation_url="https://github.com/pullboxapp/pullbox-direct-providers",
             support_url="https://github.com/pullboxapp/pullbox-direct-providers/issues",
-            source_domains=["annas-archive.gd"],
+            source_domains=list(SUPPORTED_OFFICIAL_DOMAINS),
             capabilities=ProviderCapabilities(
                 search=True,
                 resolve=True,
@@ -75,10 +79,13 @@ def create_app(
                 "properties": {
                     "domain": {
                         "type": "string",
-                        "title": "Official domain",
-                        "description": "Exact official Anna's Archive domain supported by Pullbox.",
-                        "default": _OFFICIAL_DOMAIN,
-                        "enum": [_OFFICIAL_DOMAIN],
+                        "title": "Official URL",
+                        "description": (
+                            "Enter or choose an official Anna's Archive URL supported by Pullbox."
+                        ),
+                        "default": DEFAULT_OFFICIAL_URL,
+                        "enum": list(SUPPORTED_OFFICIAL_URLS),
+                        "format": "uri",
                     },
                     "member_secret_key": {
                         "type": "string",

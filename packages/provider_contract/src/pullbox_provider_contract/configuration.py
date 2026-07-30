@@ -25,6 +25,7 @@ _FIELD_KEYS = {
     "description",
     "default",
     "enum",
+    "format",
     "minimum",
     "maximum",
     "minLength",
@@ -33,6 +34,7 @@ _FIELD_KEYS = {
     "x-pullbox-placeholder",
 }
 _FIELD_TYPES = frozenset({"string", "boolean", "integer", "number"})
+_FIELD_FORMATS = frozenset({"uri"})
 
 
 class ConfigurationSchemaError(ValueError):
@@ -49,6 +51,7 @@ class ConfigurationField:
     description: str | None
     required: bool
     secret: bool
+    input_format: str | None
     default: ConfigurationValue
     choices: tuple[ConfigurationValue, ...]
     minimum: float | None
@@ -104,6 +107,11 @@ def _validate_field(name: str, raw: object, required: bool) -> ConfigurationFiel
         raise ConfigurationSchemaError(f"Configuration field {name} has an invalid secret marker.")
     if secret and value_type != "string":
         raise ConfigurationSchemaError("Secret configuration fields must use string controls.")
+    input_format = field.get("format")
+    if input_format is not None and (
+        input_format not in _FIELD_FORMATS or value_type != "string" or secret
+    ):
+        raise ConfigurationSchemaError(f"Configuration field {name} has an unsupported format.")
 
     choices = _choices(field.get("enum"), value_type, name)
     default = field.get("default")
@@ -137,6 +145,7 @@ def _validate_field(name: str, raw: object, required: bool) -> ConfigurationFiel
         description=_optional_text(field.get("description"), f"{name} description"),
         required=required,
         secret=secret,
+        input_format=input_format if isinstance(input_format, str) else None,
         default=default
         if isinstance(default, (str, int, float, bool)) or default is None
         else None,

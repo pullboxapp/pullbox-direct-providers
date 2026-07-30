@@ -117,8 +117,45 @@ def test_only_exact_official_domain_is_accepted(domain: str) -> None:
         validate_official_domain(domain)
 
 
-def test_current_official_domain_is_normalized() -> None:
-    assert validate_official_domain("https://annas-archive.gd/") == "https://annas-archive.gd"
+@pytest.mark.parametrize(
+    "domain",
+    [
+        "https://annas-archive.gl",
+        "https://annas-archive.pk",
+        "https://annas-archive.gd",
+    ],
+)
+def test_supported_official_domains_are_normalized(domain: str) -> None:
+    assert validate_official_domain(f"{domain}/") == domain
+
+
+async def test_search_uses_the_selected_official_domain_only() -> None:
+    requested: list[tuple[str, tuple[str, ...]]] = []
+
+    async def page(url: str, **kwargs: object) -> str:
+        declared = kwargs.get("declared_domains")
+        assert isinstance(declared, tuple)
+        requested.append((url, declared))
+        return (FIXTURES / "search-results.html").read_text(encoding="utf-8")
+
+    service = AnnasArchiveProviderService(page_fetcher=page)
+    await service.search(
+        SearchIntent(
+            series_title="Example Heroes",
+            normalized_title="example heroes",
+            issue_number="7",
+            year=2026,
+        ),
+        provider_config={"domain": "https://annas-archive.gl"},
+        limit=20,
+    )
+
+    assert requested == [
+        (
+            "https://annas-archive.gl/search?q=Example+Heroes+7+2026&ext=cbz&ext=cbr&ext=pdf",
+            ("annas-archive.gl",),
+        )
+    ]
 
 
 async def test_empty_successful_fast_download_response_fails_closed() -> None:
@@ -196,6 +233,26 @@ async def test_source_health_isolated_from_source_failure() -> None:
 
     assert await healthy.source_available() is True
     assert await degraded.source_available() is False
+
+
+async def test_source_health_falls_through_supported_official_domains() -> None:
+    requested: list[tuple[str, tuple[str, ...]]] = []
+
+    async def page(url: str, **kwargs: object) -> str:
+        declared = kwargs.get("declared_domains")
+        assert isinstance(declared, tuple)
+        requested.append((url, declared))
+        if url == "https://annas-archive.gl":
+            raise RuntimeError("source unavailable")
+        return "<html></html>"
+
+    service = AnnasArchiveProviderService(page_fetcher=page)
+
+    assert await service.source_available() is True
+    assert requested == [
+        ("https://annas-archive.gl", ("annas-archive.gl",)),
+        ("https://annas-archive.pk", ("annas-archive.pk",)),
+    ]
 
 
 def _install_fast_download_transport(

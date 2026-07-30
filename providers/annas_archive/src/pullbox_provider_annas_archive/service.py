@@ -25,7 +25,13 @@ from pullbox_provider_annas_archive.parser import parse_search_html
 if TYPE_CHECKING:
     from pullbox_provider_contract.models import ResolverProfile
 
-_OFFICIAL_DOMAIN = "https://annas-archive.gd"
+SUPPORTED_OFFICIAL_DOMAINS = (
+    "annas-archive.gl",
+    "annas-archive.pk",
+    "annas-archive.gd",
+)
+SUPPORTED_OFFICIAL_URLS = tuple(f"https://{domain}" for domain in SUPPORTED_OFFICIAL_DOMAINS)
+DEFAULT_OFFICIAL_URL = "https://annas-archive.gd"
 _MD5 = re.compile(r"\A[a-f0-9]{32}\Z")
 _MAX_JSON_BYTES = 256 * 1024
 
@@ -53,7 +59,7 @@ class AnnasArchiveProviderService:
         limit: int,
         resolver_profile: ResolverProfile | None = None,
     ) -> list[Candidate]:
-        domain = validate_official_domain(str(provider_config.get("domain", _OFFICIAL_DOMAIN)))
+        domain = validate_official_domain(str(provider_config.get("domain", DEFAULT_OFFICIAL_URL)))
         query = _build_query(intent)
         params = urlencode([("q", query), ("ext", "cbz"), ("ext", "cbr"), ("ext", "pdf")])
         html = await self._page_fetcher(
@@ -73,7 +79,7 @@ class AnnasArchiveProviderService:
         provider_config: Mapping[str, object],
         source_credentials: Mapping[str, str],
     ) -> list[Artifact]:
-        domain = validate_official_domain(str(provider_config.get("domain", _OFFICIAL_DOMAIN)))
+        domain = validate_official_domain(str(provider_config.get("domain", DEFAULT_OFFICIAL_URL)))
         md5 = _candidate_md5(provider_candidate_id)
         member_key = source_credentials.get("member_secret_key", "")
         if not member_key:
@@ -126,14 +132,16 @@ class AnnasArchiveProviderService:
         ]
 
     async def source_available(self) -> bool:
-        try:
-            await self._page_fetcher(
-                _OFFICIAL_DOMAIN,
-                declared_domains=("annas-archive.gd",),
-            )
-        except RuntimeError:
-            return False
-        return True
+        for domain, url in zip(SUPPORTED_OFFICIAL_DOMAINS, SUPPORTED_OFFICIAL_URLS, strict=True):
+            try:
+                await self._page_fetcher(
+                    url,
+                    declared_domains=(domain,),
+                )
+            except RuntimeError:
+                continue
+            return True
+        return False
 
 
 def validate_official_domain(raw_domain: str) -> str:
@@ -143,9 +151,9 @@ def validate_official_domain(raw_domain: str) -> str:
     except ValueError as exc:
         raise _domain_error() from exc
     if (
-        value != _OFFICIAL_DOMAIN
+        value not in SUPPORTED_OFFICIAL_URLS
         or parsed.scheme != "https"
-        or parsed.hostname != "annas-archive.gd"
+        or parsed.hostname not in SUPPORTED_OFFICIAL_DOMAINS
         or parsed.username
         or parsed.password
         or parsed.port is not None

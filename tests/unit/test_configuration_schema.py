@@ -36,6 +36,13 @@ def test_configuration_schema_accepts_native_allowlisted_controls() -> None:
                 "enum": ["en", "fr"],
                 "default": "en",
             },
+            "source_url": {
+                "type": "string",
+                "title": "Source URL",
+                "format": "uri",
+                "enum": ["https://source-one.example", "https://source-two.example"],
+                "default": "https://source-one.example",
+            },
         },
         "additionalProperties": False,
         "required": ["language"],
@@ -48,8 +55,10 @@ def test_configuration_schema_accepts_native_allowlisted_controls() -> None:
         "include_collections",
         "result_limit",
         "language",
+        "source_url",
     )
     assert validated.properties["member_token"].secret is True
+    assert validated.properties["source_url"].input_format == "uri"
 
 
 @pytest.mark.parametrize(
@@ -69,6 +78,11 @@ def test_configuration_schema_accepts_native_allowlisted_controls() -> None:
         {
             "type": "object",
             "properties": {"unsafe": {"type": "boolean", "x-pullbox-secret": True}},
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {"unsafe": {"type": "string", "format": "html"}},
             "additionalProperties": False,
         },
         {

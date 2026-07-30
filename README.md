@@ -117,10 +117,13 @@ after a recognized challenge. It never downloads or proxies artifact bytes.
 
 ### Anna's Archive
 
-The Anna's Archive provider is an explicit opt-in integration. Search is
-limited to the exact supported official domain. Unattended resolution requires
-the user's member fast-download secret; free slow-download automation,
-CAPTCHA bypass, unofficial domains, and payload proxying are not supported.
+The Anna's Archive provider is an explicit opt-in integration. Its configurable
+official URL accepts only `https://annas-archive.gl`,
+`https://annas-archive.pk`, or `https://annas-archive.gd`. Pullbox renders the
+field as an editable URL input with those exact choices suggested; lookalike and
+arbitrary domains remain rejected. Unattended resolution requires the user's
+member fast-download secret; free slow-download automation, CAPTCHA bypass,
+unofficial domains, and payload proxying are not supported.
 
 Pullbox stores the member secret encrypted and sends it only in the active
 `POST /v1/resolve` request. The provider keeps no database or cache and must not

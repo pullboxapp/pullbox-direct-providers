@@ -76,15 +76,26 @@ async def test_anna_operations_require_provider_bearer_token(
     assert response.json()["error"]["code"] == "provider_authentication_failed"
 
 
-async def test_anna_manifest_marks_member_key_secret_and_official_domain_fixed() -> None:
+async def test_anna_manifest_marks_member_key_secret_and_official_urls_editable() -> None:
     response = await _request(_app(), "GET", "/v1/manifest")
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["provider_id"] == "pullbox.annas_archive"
-    assert payload["source_domains"] == ["annas-archive.gd"]
+    assert payload["source_domains"] == [
+        "annas-archive.gl",
+        "annas-archive.pk",
+        "annas-archive.gd",
+    ]
     schema = payload["configuration_schema"]
-    assert schema["properties"]["domain"]["default"] == "https://annas-archive.gd"
+    domain = schema["properties"]["domain"]
+    assert domain["default"] == "https://annas-archive.gd"
+    assert domain["format"] == "uri"
+    assert domain["enum"] == [
+        "https://annas-archive.gl",
+        "https://annas-archive.pk",
+        "https://annas-archive.gd",
+    ]
     assert schema["properties"]["member_secret_key"]["x-pullbox-secret"] is True
     assert schema["required"] == ["member_secret_key"]
 
