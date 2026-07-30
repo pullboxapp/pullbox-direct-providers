@@ -62,6 +62,15 @@ def create_app(
             documentation_url="https://github.com/pullboxapp/pullbox-direct-providers",
             support_url="https://github.com/pullboxapp/pullbox-direct-providers/issues",
             source_domains=["getcomics.org"],
+            artifact_host_patterns=[
+                "generic_https",
+                "pixeldrain",
+                "mega",
+                "rootz",
+                "mediafire",
+                "terabox",
+                "datanodes",
+            ],
             capabilities=ProviderCapabilities(
                 search=True,
                 resolve=True,

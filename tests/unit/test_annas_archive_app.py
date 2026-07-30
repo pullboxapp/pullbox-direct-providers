@@ -87,6 +87,7 @@ async def test_anna_manifest_marks_member_key_secret_and_official_urls_editable(
         "annas-archive.pk",
         "annas-archive.gd",
     ]
+    assert payload["artifact_host_patterns"] == ["generic_https"]
     schema = payload["configuration_schema"]
     domain = schema["properties"]["domain"]
     assert domain["default"] == "https://annas-archive.gd"

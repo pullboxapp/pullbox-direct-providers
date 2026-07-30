@@ -67,6 +67,7 @@ def create_app(
             documentation_url="https://github.com/pullboxapp/pullbox-direct-providers",
             support_url="https://github.com/pullboxapp/pullbox-direct-providers/issues",
             source_domains=list(SUPPORTED_OFFICIAL_DOMAINS),
+            artifact_host_patterns=["generic_https"],
             capabilities=ProviderCapabilities(
                 search=True,
                 resolve=True,

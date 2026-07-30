@@ -83,6 +83,15 @@ async def test_getcomics_manifest_declares_narrow_stateless_capabilities() -> No
     payload = response.json()
     assert payload["provider_id"] == "pullbox.getcomics"
     assert payload["source_domains"] == ["getcomics.org"]
+    assert payload["artifact_host_patterns"] == [
+        "generic_https",
+        "pixeldrain",
+        "mega",
+        "rootz",
+        "mediafire",
+        "terabox",
+        "datanodes",
+    ]
     assert payload["capabilities"]["browser_challenge"] is True
     assert payload["configuration_schema"] == {
         "type": "object",
