@@ -139,6 +139,11 @@ components:
               type: string
             message:
               type: string
+            retry_after_seconds:
+              type: integer
+              minimum: 0
+              maximum: 86400
+              description: Optional bounded delay before retrying this operation.
     ProviderCapabilities:
       type: object
       required: [search, resolve, browser_challenge, health, quota, configuration_schema]
@@ -531,6 +536,24 @@ components:
           type: array
           items:
             type: string
+    QuotaStatus:
+      type: object
+      properties:
+        remaining:
+          type: [integer, "null"]
+          minimum: 0
+          maximum: 1000000
+        limit:
+          type: [integer, "null"]
+          minimum: 0
+          maximum: 1000000
+        window_seconds:
+          type: [integer, "null"]
+          minimum: 1
+          maximum: 31536000
+        reset_at:
+          type: [string, "null"]
+          format: date-time
     ResolveResponse:
       type: object
       required: [protocol_version, request_id, artifacts]
@@ -545,3 +568,7 @@ components:
           maxItems: 100
           items:
             $ref: "#/components/schemas/Artifact"
+        quota:
+          oneOf:
+            - $ref: "#/components/schemas/QuotaStatus"
+            - type: "null"

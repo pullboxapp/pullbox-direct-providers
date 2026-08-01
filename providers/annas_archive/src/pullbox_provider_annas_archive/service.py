@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from urllib.parse import urlencode, urlsplit
 
@@ -16,6 +17,7 @@ from pullbox_provider_contract.models import (
     ArtifactRoute,
     Candidate,
     Mirror,
+    QuotaStatus,
     SearchIntent,
 )
 from pullbox_provider_contract.source_http import fetch_source_html
@@ -34,9 +36,18 @@ SUPPORTED_OFFICIAL_URLS = tuple(f"https://{domain}" for domain in SUPPORTED_OFFI
 DEFAULT_OFFICIAL_URL = "https://annas-archive.gd"
 _MD5 = re.compile(r"\A[a-f0-9]{32}\Z")
 _MAX_JSON_BYTES = 256 * 1024
+_FAST_DOWNLOAD_WINDOW_SECONDS = 64_800
 
 PageFetcher = Callable[..., Awaitable[str]]
 FastDownloadFetcher = Callable[..., Awaitable[tuple[int, dict[str, object]]]]
+
+
+@dataclass(frozen=True, slots=True)
+class AnnasArchiveResolveResult:
+    """Resolved artifacts plus safe source-account capacity telemetry."""
+
+    artifacts: list[Artifact]
+    quota: QuotaStatus | None
 
 
 class AnnasArchiveProviderService:
@@ -78,7 +89,7 @@ class AnnasArchiveProviderService:
         *,
         provider_config: Mapping[str, object],
         source_credentials: Mapping[str, str],
-    ) -> list[Artifact]:
+    ) -> AnnasArchiveResolveResult:
         domain = validate_official_domain(str(provider_config.get("domain", DEFAULT_OFFICIAL_URL)))
         md5 = _candidate_md5(provider_candidate_id)
         member_key = source_credentials.get("member_secret_key", "")
@@ -104,6 +115,7 @@ class AnnasArchiveProviderService:
                 429,
                 "source_quota_limited",
                 "Anna's Archive member fast-download quota is unavailable.",
+                retry_after_seconds=_FAST_DOWNLOAD_WINDOW_SECONDS,
             )
         if status not in {200, 204}:
             raise ProtocolError(503, "source_unavailable", "Anna's Archive resolve failed.")
@@ -114,22 +126,25 @@ class AnnasArchiveProviderService:
                 "source_malformed_response",
                 "Anna's Archive returned no safe fast-download URL.",
             )
-        return [
-            Artifact(
-                artifact_id=f"anna-fast:{md5}",
-                coverage=ArtifactCoverage(issue_ids=[md5]),
-                route=ArtifactRoute.DIRECT_ARTIFACT,
-                mirrors=[
-                    Mirror(
-                        mirror_id=f"anna-fast:{md5}:0",
-                        host_kind="generic_https",
-                        final_url=raw_url,
-                        checksum=f"md5:{md5}",
-                    )
-                ],
-                limitations=["member_fast_download"],
-            )
-        ]
+        return AnnasArchiveResolveResult(
+            artifacts=[
+                Artifact(
+                    artifact_id=f"anna-fast:{md5}",
+                    coverage=ArtifactCoverage(issue_ids=[md5]),
+                    route=ArtifactRoute.DIRECT_ARTIFACT,
+                    mirrors=[
+                        Mirror(
+                            mirror_id=f"anna-fast:{md5}:0",
+                            host_kind="generic_https",
+                            final_url=raw_url,
+                            checksum=f"md5:{md5}",
+                        )
+                    ],
+                    limitations=["member_fast_download"],
+                )
+            ],
+            quota=_quota_status(payload),
+        )
 
     async def source_available(self) -> bool:
         for domain, url in zip(SUPPORTED_OFFICIAL_DOMAINS, SUPPORTED_OFFICIAL_URLS, strict=True):
@@ -276,6 +291,41 @@ def _is_quota_error(payload: Mapping[str, object]) -> bool:
     return isinstance(error, str) and any(
         marker in error.casefold() for marker in ("quota", "downloads remaining", "limit")
     )
+
+
+def _quota_status(payload: Mapping[str, object]) -> QuotaStatus | None:
+    raw = payload.get("account_fast_download_info")
+    if not isinstance(raw, Mapping):
+        return None
+    remaining = _bounded_nonnegative_int(raw.get("downloads_left"))
+    limit = next(
+        (
+            parsed
+            for key in ("downloads_per_day", "download_limit", "daily_limit")
+            if (parsed := _bounded_nonnegative_int(raw.get(key))) is not None
+        ),
+        None,
+    )
+    if remaining is None and limit is None:
+        return None
+    return QuotaStatus(
+        remaining=remaining,
+        limit=limit,
+        # Anna documents a rolling window rather than a midnight reset.
+        window_seconds=_FAST_DOWNLOAD_WINDOW_SECONDS,
+    )
+
+
+def _bounded_nonnegative_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if not isinstance(value, (str, int, float)):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if 0 <= parsed <= 1_000_000 else None
 
 
 def _domain_error() -> ProtocolError:

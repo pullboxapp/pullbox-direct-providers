@@ -6,7 +6,9 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from pullbox_provider_annas_archive.app import create_app
-from pullbox_provider_contract.models import Artifact, Candidate
+from pullbox_provider_annas_archive.service import AnnasArchiveResolveResult
+from pullbox_provider_contract.errors import ProtocolError
+from pullbox_provider_contract.models import Candidate, QuotaStatus
 
 from tests.conftest import TEST_TOKEN, resolve_payload, search_payload
 
@@ -36,11 +38,14 @@ class _AnnaService:
             raise self.error
         return []
 
-    async def resolve(self, _candidate_id: str, **kwargs: object) -> list[Artifact]:
+    async def resolve(self, _candidate_id: str, **kwargs: object) -> AnnasArchiveResolveResult:
         self.resolve_kwargs = kwargs
         if self.error is not None:
             raise self.error
-        return []
+        return AnnasArchiveResolveResult(
+            artifacts=[],
+            quota=QuotaStatus(remaining=22, limit=25, window_seconds=64_800),
+        )
 
 
 def _app(service: _AnnaService | None = None) -> FastAPI:
@@ -139,6 +144,37 @@ async def test_anna_search_and_resolve_forward_secrets_only_to_active_operation(
     assert service.resolve_kwargs["source_credentials"] == {"member_secret_key": MEMBER_SECRET}
     assert MEMBER_SECRET not in search.text
     assert MEMBER_SECRET not in resolve.text
+    assert resolve.json()["quota"] == {
+        "remaining": 22,
+        "limit": 25,
+        "window_seconds": 64_800,
+        "reset_at": None,
+    }
+
+
+async def test_anna_quota_error_returns_safe_retry_window() -> None:
+    response = await _request(
+        _app(
+            _AnnaService(
+                error=ProtocolError(
+                    429,
+                    "source_quota_limited",
+                    "Fast-download quota is unavailable.",
+                    retry_after_seconds=64_800,
+                )
+            )
+        ),
+        "POST",
+        "/v1/resolve",
+        json=resolve_payload(),
+    )
+
+    assert response.status_code == 429
+    assert response.json()["error"] == {
+        "code": "source_quota_limited",
+        "message": "Fast-download quota is unavailable.",
+        "retry_after_seconds": 64_800,
+    }
 
 
 async def test_anna_health_and_unexpected_source_errors_are_explicit_and_safe() -> None:

@@ -51,7 +51,12 @@ def install_protocol_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(ProtocolError)
     async def protocol_error(_request: Request, exc: ProtocolError) -> JSONResponse:
-        return error_response(exc.code, exc.message, exc.status_code)
+        return error_response(
+            exc.code,
+            exc.message,
+            exc.status_code,
+            retry_after_seconds=exc.retry_after_seconds,
+        )
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(_request: Request, _exc: RequestValidationError) -> JSONResponse:
@@ -89,9 +94,22 @@ async def within_deadline[Result](
         ) from exc
 
 
-def error_response(code: str, message: str, status_code: int) -> JSONResponse:
+def error_response(
+    code: str,
+    message: str,
+    status_code: int,
+    *,
+    retry_after_seconds: int | None = None,
+) -> JSONResponse:
     """Build the protocol's bounded error envelope."""
+    error: dict[str, str | int] = {"code": code, "message": message}
+    if (
+        isinstance(retry_after_seconds, int)
+        and not isinstance(retry_after_seconds, bool)
+        and 0 <= retry_after_seconds <= 86_400
+    ):
+        error["retry_after_seconds"] = retry_after_seconds
     return JSONResponse(
         status_code=status_code,
-        content={"error": {"code": code, "message": message}},
+        content={"error": error},
     )

@@ -179,7 +179,7 @@ def create_app(
     async def resolve(payload: ResolveRequest) -> ResolveResponse:
         validate_request(payload.protocol_version, payload.deadline)
         try:
-            artifacts = await within_deadline(
+            result = await within_deadline(
                 provider_service.resolve(
                     payload.provider_candidate_id,
                     provider_config=payload.provider_config,
@@ -205,6 +205,10 @@ def create_app(
                 "source_unavailable",
                 "Anna's Archive is temporarily unavailable.",
             ) from exc
-        return ResolveResponse(request_id=payload.request_id, artifacts=artifacts)
+        return ResolveResponse(
+            request_id=payload.request_id,
+            artifacts=result.artifacts,
+            quota=result.quota,
+        )
 
     return app

@@ -12,3 +12,4 @@ class ProtocolError(Exception):
     status_code: int
     code: str
     message: str
+    retry_after_seconds: int | None = None

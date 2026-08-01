@@ -132,6 +132,14 @@ quota, source availability, and malformed responses remain distinct failures.
 Opening search-result details must not call resolve because a fast-link request
 may consume source quota.
 
+Successful resolves may report provider-generic remaining/limit/window quota
+telemetry. The response intentionally excludes account identity and download
+history. Pullbox stores only the latest capacity observation, applies its
+operator-configured automatic reserve, and may continue to another already
+accepted source when Anna's Archive is unavailable. Manual grabs may use the
+reserved slots. Quota errors may include a bounded `retry_after_seconds` hint
+so Pullbox can recover automatically even without an earlier capacity report.
+
 ## Deployment And Registration
 
 Provider services are deployed separately from Pullbox. An operator creates a

@@ -216,7 +216,17 @@ class Artifact(ContractModel):
         return self
 
 
+class QuotaStatus(ContractModel):
+    """Optional source capacity that intentionally excludes account history."""
+
+    remaining: int | None = Field(default=None, ge=0, le=1_000_000)
+    limit: int | None = Field(default=None, ge=0, le=1_000_000)
+    window_seconds: int | None = Field(default=None, ge=1, le=31_536_000)
+    reset_at: datetime | None = None
+
+
 class ResolveResponse(ContractModel):
     protocol_version: str = PROTOCOL_VERSION
     request_id: UUID
     artifacts: list[Artifact] = Field(max_length=100)
+    quota: QuotaStatus | None = None
