@@ -30,10 +30,14 @@ class _Source:
         domain: str,
         md5: str,
         member_secret_key: str,
+        path_index: int = 0,
+        domain_index: int = 0,
     ) -> tuple[int, dict[str, object]]:
         assert domain == "https://annas-archive.gd"
         assert md5 == "11111111111111111111111111111111"
         assert member_secret_key == MEMBER_KEY
+        assert path_index == 0
+        assert domain_index in {0, 2, 4, 6}
         return 200, {
             "download_url": SIGNED_URL,
             "account_fast_download_info": {"downloads_left": 9},
@@ -72,6 +76,86 @@ async def test_member_search_and_fast_resolve_use_secret_only_for_active_request
     assert result.quota.remaining == 9
     assert result.quota.window_seconds == 64_800
     assert "recently_downloaded" not in result.quota.model_dump()
+
+
+async def test_fast_resolve_exposes_distinct_secure_server_routes_in_bounded_order() -> None:
+    observed: list[tuple[int, int]] = []
+
+    async def fast(
+        *,
+        domain: str,
+        md5: str,
+        member_secret_key: str,
+        path_index: int,
+        domain_index: int,
+    ) -> tuple[int, dict[str, object]]:
+        assert domain == "https://annas-archive.gd"
+        assert md5 == "11111111111111111111111111111111"
+        assert member_secret_key == MEMBER_KEY
+        observed.append((path_index, domain_index))
+        responses: dict[int, tuple[int, dict[str, object]]] = {
+            0: (
+                200,
+                {
+                    "download_url": "https://fast-a.example/fixture.cbz?token=first",
+                    "account_fast_download_info": {"downloads_left": 8},
+                },
+            ),
+            2: (200, {"download_url": "http://192.0.2.10/fixture.cbz"}),
+            4: (200, {"download_url": "https://fast-b.example/fixture.cbz"}),
+            6: (200, {"download_url": "https://fast-a.example/fixture.cbz?token=second"}),
+        }
+        return responses[domain_index]
+
+    service = AnnasArchiveProviderService(
+        page_fetcher=_Source().page,
+        fast_download_fetcher=fast,
+    )
+
+    result = await service.resolve(
+        "anna:11111111111111111111111111111111",
+        provider_config={"domain": "https://annas-archive.gd"},
+        source_credentials={"member_secret_key": MEMBER_KEY},
+    )
+
+    assert observed == [(0, 0), (0, 2), (0, 4), (0, 6)]
+    assert [mirror.mirror_id for mirror in result.artifacts[0].mirrors] == [
+        "anna-fast:11111111111111111111111111111111:0",
+        "anna-fast:11111111111111111111111111111111:domain-4",
+    ]
+    assert [mirror.final_url for mirror in result.artifacts[0].mirrors] == [
+        "https://fast-a.example/fixture.cbz?token=first",
+        "https://fast-b.example/fixture.cbz",
+    ]
+    assert result.quota is not None
+    assert result.quota.remaining == 8
+
+
+async def test_fast_resolve_keeps_primary_route_when_alternate_servers_fail() -> None:
+    observed: list[int] = []
+
+    async def fast(*, domain_index: int, **_kwargs: object) -> tuple[int, dict[str, object]]:
+        observed.append(domain_index)
+        if domain_index == 0:
+            return 200, {"download_url": "https://fast-a.example/fixture.cbz"}
+        if domain_index == 2:
+            raise ProtocolError(503, "source_unavailable", "Alternate server unavailable.")
+        if domain_index == 4:
+            return 400, {"error": "Invalid domain_index or path_index"}
+        return 429, {"error": "Daily quota reached"}
+
+    result = await AnnasArchiveProviderService(
+        page_fetcher=_Source().page,
+        fast_download_fetcher=fast,
+    ).resolve(
+        "anna:11111111111111111111111111111111",
+        provider_config={"domain": "https://annas-archive.gd"},
+        source_credentials={"member_secret_key": MEMBER_KEY},
+    )
+
+    assert observed == [0, 2, 4, 6]
+    assert len(result.artifacts[0].mirrors) == 1
+    assert result.artifacts[0].mirrors[0].mirror_id.endswith(":0")
 
 
 async def test_missing_membership_and_quota_are_distinct_safe_failures() -> None:
@@ -188,6 +272,12 @@ async def test_empty_successful_fast_download_response_fails_closed() -> None:
     [
         (403, {}, 401, "source_authentication_required"),
         (200, {"error": "Daily quota reached"}, 429, "source_quota_limited"),
+        (
+            400,
+            {"error": "Invalid domain_index or path_index"},
+            404,
+            "candidate_not_found",
+        ),
         (500, {}, 503, "source_unavailable"),
         (
             200,
@@ -310,6 +400,8 @@ async def test_fast_download_http_client_reads_bounded_json_and_closes_response(
         domain="https://annas-archive.gd",
         md5="11111111111111111111111111111111",
         member_secret_key=MEMBER_KEY,
+        path_index=0,
+        domain_index=6,
     )
 
     assert status == 200
@@ -318,6 +410,8 @@ async def test_fast_download_http_client_reads_bounded_json_and_closes_response(
     assert observed.url.path == "/dyn/api/fast_download.json"
     assert observed.url.params["md5"] == "11111111111111111111111111111111"
     assert observed.url.params["key"] == MEMBER_KEY
+    assert observed.url.params["path_index"] == "0"
+    assert observed.url.params["domain_index"] == "6"
 
 
 @pytest.mark.parametrize(

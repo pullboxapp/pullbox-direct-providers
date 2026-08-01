@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from urllib.parse import urlencode, urlsplit
@@ -37,6 +37,7 @@ DEFAULT_OFFICIAL_URL = "https://annas-archive.gd"
 _MD5 = re.compile(r"\A[a-f0-9]{32}\Z")
 _MAX_JSON_BYTES = 256 * 1024
 _FAST_DOWNLOAD_WINDOW_SECONDS = 64_800
+_FAST_DOWNLOAD_DOMAIN_INDICES = (0, 2, 4, 6)
 
 PageFetcher = Callable[..., Awaitable[str]]
 FastDownloadFetcher = Callable[..., Awaitable[tuple[int, dict[str, object]]]]
@@ -103,28 +104,33 @@ class AnnasArchiveProviderService:
             domain=domain,
             md5=md5,
             member_secret_key=member_key,
+            path_index=0,
+            domain_index=0,
         )
-        if status in {401, 403}:
-            raise ProtocolError(
-                401,
-                "source_authentication_required",
-                "Anna's Archive rejected the member fast-download credential.",
-            )
-        if status == 429 or _is_quota_error(payload):
-            raise ProtocolError(
-                429,
-                "source_quota_limited",
-                "Anna's Archive member fast-download quota is unavailable.",
-                retry_after_seconds=_FAST_DOWNLOAD_WINDOW_SECONDS,
-            )
-        if status not in {200, 204}:
-            raise ProtocolError(503, "source_unavailable", "Anna's Archive resolve failed.")
-        raw_url = payload.get("download_url")
-        if not isinstance(raw_url, str) or not _safe_download_url(raw_url):
+        _raise_primary_fast_download_error(status, payload)
+        indexed_payloads = [(0, payload)]
+        for domain_index in _FAST_DOWNLOAD_DOMAIN_INDICES[1:]:
+            try:
+                alternate_status, alternate_payload = await self._fast_download_fetcher(
+                    domain=domain,
+                    md5=md5,
+                    member_secret_key=member_key,
+                    path_index=0,
+                    domain_index=domain_index,
+                )
+            except ProtocolError:
+                continue
+            if alternate_status == 429 or _is_quota_error(alternate_payload):
+                break
+            if alternate_status in {200, 204}:
+                indexed_payloads.append((domain_index, alternate_payload))
+
+        mirrors = _secure_fast_download_mirrors(md5, indexed_payloads)
+        if not mirrors:
             raise ProtocolError(
                 503,
                 "source_malformed_response",
-                "Anna's Archive returned no safe fast-download URL.",
+                "Anna's Archive returned no safe fast-download URLs.",
             )
         return AnnasArchiveResolveResult(
             artifacts=[
@@ -132,14 +138,7 @@ class AnnasArchiveProviderService:
                     artifact_id=f"anna-fast:{md5}",
                     coverage=ArtifactCoverage(issue_ids=[md5]),
                     route=ArtifactRoute.DIRECT_ARTIFACT,
-                    mirrors=[
-                        Mirror(
-                            mirror_id=f"anna-fast:{md5}:0",
-                            host_kind="generic_https",
-                            final_url=raw_url,
-                            checksum=f"md5:{md5}",
-                        )
-                    ],
+                    mirrors=mirrors,
                     limitations=["member_fast_download"],
                 )
             ],
@@ -200,6 +199,8 @@ async def _fetch_fast_download(
     domain: str,
     md5: str,
     member_secret_key: str,
+    path_index: int = 0,
+    domain_index: int = 0,
 ) -> tuple[int, dict[str, object]]:
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0),
@@ -213,7 +214,12 @@ async def _fetch_fast_download(
                 client.build_request(
                     "GET",
                     f"{domain}/dyn/api/fast_download.json",
-                    params={"md5": md5, "key": member_secret_key},
+                    params={
+                        "md5": md5,
+                        "key": member_secret_key,
+                        "path_index": path_index,
+                        "domain_index": domain_index,
+                    },
                 ),
                 stream=True,
                 follow_redirects=False,
@@ -277,13 +283,68 @@ def _build_query(intent: SearchIntent) -> str:
 
 
 def _safe_download_url(raw_url: str) -> bool:
+    return _safe_download_origin(raw_url) is not None
+
+
+def _safe_download_origin(raw_url: str) -> tuple[str, int] | None:
     try:
         parsed = urlsplit(raw_url)
+        port = parsed.port
     except ValueError:
-        return False
-    return bool(
-        parsed.scheme == "https" and parsed.hostname and not parsed.username and not parsed.password
-    )
+        return None
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        return None
+    return parsed.hostname.casefold().rstrip("."), port or 443
+
+
+def _raise_primary_fast_download_error(status: int, payload: Mapping[str, object]) -> None:
+    if status in {401, 403}:
+        raise ProtocolError(
+            401,
+            "source_authentication_required",
+            "Anna's Archive rejected the member fast-download credential.",
+        )
+    if status == 429 or _is_quota_error(payload):
+        raise ProtocolError(
+            429,
+            "source_quota_limited",
+            "Anna's Archive member fast-download quota is unavailable.",
+            retry_after_seconds=_FAST_DOWNLOAD_WINDOW_SECONDS,
+        )
+    if _is_candidate_unavailable(payload):
+        raise ProtocolError(
+            404,
+            "candidate_not_found",
+            "Anna's Archive result has no member fast-download route.",
+        )
+    if status not in {200, 204}:
+        raise ProtocolError(503, "source_unavailable", "Anna's Archive resolve failed.")
+
+
+def _secure_fast_download_mirrors(
+    md5: str,
+    indexed_payloads: Sequence[tuple[int, Mapping[str, object]]],
+) -> list[Mirror]:
+    mirrors: list[Mirror] = []
+    seen_origins: set[tuple[str, int]] = set()
+    for domain_index, payload in indexed_payloads:
+        raw_url = payload.get("download_url")
+        if not isinstance(raw_url, str):
+            continue
+        origin = _safe_download_origin(raw_url)
+        if origin is None or origin in seen_origins:
+            continue
+        seen_origins.add(origin)
+        suffix = "0" if domain_index == 0 else f"domain-{domain_index}"
+        mirrors.append(
+            Mirror(
+                mirror_id=f"anna-fast:{md5}:{suffix}",
+                host_kind="generic_https",
+                final_url=raw_url,
+                checksum=f"md5:{md5}",
+            )
+        )
+    return mirrors
 
 
 def _is_quota_error(payload: Mapping[str, object]) -> bool:
@@ -291,6 +352,11 @@ def _is_quota_error(payload: Mapping[str, object]) -> bool:
     return isinstance(error, str) and any(
         marker in error.casefold() for marker in ("quota", "downloads remaining", "limit")
     )
+
+
+def _is_candidate_unavailable(payload: Mapping[str, object]) -> bool:
+    error = payload.get("error")
+    return isinstance(error, str) and "invalid domain_index or path_index" in error.casefold()
 
 
 def _quota_status(payload: Mapping[str, object]) -> QuotaStatus | None:
