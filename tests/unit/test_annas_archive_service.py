@@ -255,6 +255,29 @@ async def test_source_health_falls_through_supported_official_domains() -> None:
     ]
 
 
+async def test_source_health_reports_each_official_domain_independently() -> None:
+    requested: list[str] = []
+
+    async def page(url: str, **_kwargs: object) -> str:
+        requested.append(url)
+        if url != "https://annas-archive.pk":
+            raise RuntimeError("source unavailable")
+        return "<html></html>"
+
+    service = AnnasArchiveProviderService(page_fetcher=page)
+
+    assert await service.source_reachability() == {
+        "annas-archive.gl": False,
+        "annas-archive.pk": True,
+        "annas-archive.gd": False,
+    }
+    assert requested == [
+        "https://annas-archive.gl",
+        "https://annas-archive.pk",
+        "https://annas-archive.gd",
+    ]
+
+
 def _install_fast_download_transport(
     monkeypatch: pytest.MonkeyPatch,
     handler: httpx.AsyncBaseTransport,

@@ -15,6 +15,7 @@ from pullbox_provider_contract.api import (
 from pullbox_provider_contract.errors import ProtocolError
 from pullbox_provider_contract.models import (
     PROTOCOL_VERSION,
+    DiagnosticScalar,
     HealthResponse,
     ManifestResponse,
     ProviderCapabilities,
@@ -109,7 +110,15 @@ def create_app(
         dependencies=[Depends(authenticate)],
     )
     async def health() -> HealthResponse:
-        available = await provider_service.source_available()
+        reachability = await provider_service.source_reachability()
+        available = any(reachability.values())
+        diagnostics: dict[str, DiagnosticScalar] = {
+            "source": "reachable" if available else "unreachable",
+            **{
+                f"source.{domain}": "reachable" if reachable else "unreachable"
+                for domain, reachable in reachability.items()
+            },
+        }
         return HealthResponse(
             process_status=ProviderStatus.HEALTHY,
             source_status=(ProviderStatus.HEALTHY if available else ProviderStatus.DEGRADED),
@@ -118,7 +127,7 @@ def create_app(
                 if available
                 else "Anna's Archive source reachability needs attention."
             ),
-            diagnostics={"source": "reachable" if available else "unreachable"},
+            diagnostics=diagnostics,
         )
 
     @app.post(

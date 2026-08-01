@@ -23,6 +23,13 @@ class _AnnaService:
     async def source_available(self) -> bool:
         return self.available
 
+    async def source_reachability(self) -> dict[str, bool]:
+        return {
+            "annas-archive.gl": self.available,
+            "annas-archive.pk": self.available,
+            "annas-archive.gd": self.available,
+        }
+
     async def search(self, _intent: object, **kwargs: object) -> list[Candidate]:
         self.search_kwargs = kwargs
         if self.error is not None:
@@ -145,9 +152,40 @@ async def test_anna_health_and_unexpected_source_errors_are_explicit_and_safe() 
 
     assert degraded.status_code == 200
     assert degraded.json()["source_status"] == "degraded"
+    assert degraded.json()["diagnostics"] == {
+        "source": "unreachable",
+        "source.annas-archive.gl": "unreachable",
+        "source.annas-archive.pk": "unreachable",
+        "source.annas-archive.gd": "unreachable",
+    }
     assert failed.status_code == 503
     assert failed.json()["error"] == {
         "code": "source_unavailable",
         "message": "Anna's Archive is temporarily unavailable.",
     }
     assert MEMBER_SECRET not in failed.text
+
+
+async def test_anna_health_reports_each_official_domain_independently() -> None:
+    service = _AnnaService()
+
+    async def reachability() -> dict[str, bool]:
+        return {
+            "annas-archive.gl": True,
+            "annas-archive.pk": False,
+            "annas-archive.gd": False,
+        }
+
+    service.source_reachability = reachability  # type: ignore[method-assign]
+
+    response = await _request(_app(service), "GET", "/v1/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source_status"] == "healthy"
+    assert payload["diagnostics"] == {
+        "source": "reachable",
+        "source.annas-archive.gl": "reachable",
+        "source.annas-archive.pk": "unreachable",
+        "source.annas-archive.gd": "unreachable",
+    }

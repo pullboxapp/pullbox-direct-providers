@@ -22,6 +22,9 @@ from pullbox_provider_contract.models import (
 
 _SIZE = re.compile(r"\bSize\s*:\s*(\d+(?:\.\d+)?)\s*(KB|MB|GB)\b", re.IGNORECASE)
 _IGNORED_TITLES = frozenset({"READ ONLINE", "VIKINGFILE"})
+_VOID_TAGS = frozenset(
+    {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source"}
+)
 _HOST_TITLE_KINDS = {
     "PIXELDRAIN": "pixeldrain",
     "MEGA": "mega",
@@ -61,7 +64,7 @@ class _DocumentParser(HTMLParser):
         self.links: list[_Link] = []
         self.all_classes: set[str] = set()
         self.text_parts: list[str] = []
-        self._contexts: list[frozenset[str]] = []
+        self._contexts: list[tuple[str, frozenset[str]]] = []
         self._link: tuple[str, frozenset[str], str, frozenset[str], list[str]] | None = None
         self.release_groups: list[_ReleaseGroup] = []
         self._active_group: _ReleaseGroup | None = None
@@ -72,12 +75,13 @@ class _DocumentParser(HTMLParser):
         values = {name: value or "" for name, value in attrs}
         classes = frozenset(values.get("class", "").split())
         self.all_classes.update(classes)
-        self._contexts.append(classes)
+        if tag not in _VOID_TAGS:
+            self._contexts.append((tag, classes))
         if tag in {"h1", "h2", "h3", "h4", "h5", "h6", "p"} and self._block_tag is None:
             self._block_tag = tag
             self._block_parts = []
         if tag == "a":
-            context = frozenset().union(*self._contexts)
+            context = frozenset().union(*(classes for _, classes in self._contexts))
             self._link = (values.get("href", ""), classes, values.get("title", ""), context, [])
 
     def handle_endtag(self, tag: str) -> None:
@@ -104,8 +108,10 @@ class _DocumentParser(HTMLParser):
                 self._active_group.text_parts.append(text)
             self._block_tag = None
             self._block_parts = []
-        if self._contexts:
-            self._contexts.pop()
+        for index in range(len(self._contexts) - 1, -1, -1):
+            if self._contexts[index][0] == tag:
+                del self._contexts[index:]
+                break
 
     def handle_data(self, data: str) -> None:
         normalized = " ".join(data.split())
@@ -133,14 +139,18 @@ def parse_search_html(html: str, *, source_domain: str) -> list[Candidate]:
     for link in document.links:
         if "post-title" not in link.context_classes or not link.text:
             continue
-        if not _is_source_url(link.href, source_domain) or link.href in seen:
+        if not _is_source_url(link.href, source_domain):
             continue
-        seen.add(link.href)
+        source_reference = _canonical_source_url(link.href)
+        candidate_identity = _candidate_identity(source_reference)
+        if candidate_identity in seen:
+            continue
+        seen.add(candidate_identity)
         evidence = parse_comic_title(link.text)
         candidates.append(
             Candidate(
-                provider_candidate_id=_candidate_identity(link.href),
-                source_reference=link.href,
+                provider_candidate_id=candidate_identity,
+                source_reference=source_reference,
                 display_title=link.text,
                 raw_title=link.text,
                 parsed=ParsedCandidate(
@@ -174,7 +184,7 @@ def parse_release_html(
         raise GetComicsLayoutError("GetComics release page has no recognized download controls.")
 
     artifacts: list[Artifact] = []
-    for group_index, group in enumerate(groups):
+    for group in groups:
         mirrors = _normalize_mirrors(
             group.links,
             source_url=source_url,
@@ -188,7 +198,10 @@ def parse_release_html(
         evidence = parse_comic_title(title)
         artifacts.append(
             Artifact(
-                artifact_id=_identity("artifact", f"{source_url}:{group_index}:{title}"),
+                artifact_id=_identity(
+                    "artifact",
+                    f"{source_url}:{title}:{'|'.join(sorted(item.mirror_id for item in mirrors))}",
+                ),
                 coverage=ArtifactCoverage(
                     issue_numbers=list(evidence.issue_numbers),
                     volume=evidence.volume,
@@ -353,10 +366,28 @@ def _is_source_redirect(raw_url: str, source_domain: str) -> bool:
 
 
 def _is_source_url(raw_url: str, source_domain: str) -> bool:
-    parsed = urlsplit(raw_url)
+    try:
+        parsed = urlsplit(raw_url)
+        port = parsed.port
+    except ValueError:
+        return False
     hostname = (parsed.hostname or "").casefold().rstrip(".")
     expected = source_domain.casefold().rstrip(".")
-    return parsed.scheme == "https" and hostname == expected and not parsed.username
+    return (
+        parsed.scheme == "https"
+        and hostname == expected
+        and parsed.username is None
+        and parsed.password is None
+        and port is None
+    )
+
+
+def _canonical_source_url(raw_url: str) -> str:
+    parsed = urlsplit(raw_url)
+    hostname = parsed.hostname
+    if hostname is None:
+        raise GetComicsLayoutError("GetComics returned an invalid release URL.")
+    return f"https://{hostname}{parsed.path or '/'}"
 
 
 def _identity(prefix: str, value: str) -> str:

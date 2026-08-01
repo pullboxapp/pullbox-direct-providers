@@ -143,6 +143,21 @@ class AnnasArchiveProviderService:
             return True
         return False
 
+    async def source_reachability(self) -> dict[str, bool]:
+        """Report each selectable source independently for configuration health."""
+        reachability: dict[str, bool] = {}
+        for domain, url in zip(SUPPORTED_OFFICIAL_DOMAINS, SUPPORTED_OFFICIAL_URLS, strict=True):
+            try:
+                await self._page_fetcher(
+                    url,
+                    declared_domains=(domain,),
+                )
+            except RuntimeError:
+                reachability[domain] = False
+            else:
+                reachability[domain] = True
+        return reachability
+
 
 def validate_official_domain(raw_domain: str) -> str:
     value = raw_domain.strip().rstrip("/")

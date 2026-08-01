@@ -58,11 +58,14 @@ def parse_comic_title(raw_title: str) -> ComicTitleEvidence:
     issue_numbers: tuple[str, ...] = ()
     range_match = _HASH_RANGE.search(working)
     if range_match:
-        start = int(float(range_match.group("start")))
-        end = int(float(range_match.group("end")))
-        if start <= end and end - start < 100:
-            issue_numbers = tuple(str(value) for value in range(start, end + 1))
-            working = working[: range_match.start()].strip()
+        start_value = range_match.group("start")
+        end_value = range_match.group("end")
+        working = working[: range_match.start()].strip()
+        if "." not in start_value and "." not in end_value:
+            start = int(start_value)
+            end = int(end_value)
+            if start <= end and end - start < 100:
+                issue_numbers = tuple(str(value) for value in range(start, end + 1))
     if not issue_numbers:
         issue_match = _HASH_ISSUE.search(working) or _TRAILING_ISSUE.search(working)
         if issue_match:

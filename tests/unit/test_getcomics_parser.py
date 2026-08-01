@@ -204,3 +204,67 @@ def test_release_parser_keeps_mirror_identity_stable_after_redirect_resolution()
     )
 
     assert first[0].mirrors[0].mirror_id == second[0].mirrors[0].mirror_id
+
+
+def test_release_artifact_identity_is_stable_when_groups_reorder() -> None:
+    first_group = """
+      <p>Example Heroes #1 (2026)</p>
+      <a class="aio-red" title="PIXELDRAIN" href="https://pixeldrain.com/u/one">One</a>
+    """
+    second_group = """
+      <p>Example Heroes #2 (2026)</p>
+      <a class="aio-red" title="PIXELDRAIN" href="https://pixeldrain.com/u/two">Two</a>
+    """
+
+    first = parse_release_html(
+        f'<section class="post-contents">{first_group}{second_group}</section>',
+        source_url="https://getcomics.org/dc/example-heroes/",
+    )
+    reordered = parse_release_html(
+        f'<section class="post-contents">{second_group}{first_group}</section>',
+        source_url="https://getcomics.org/dc/example-heroes/",
+    )
+
+    assert {item.coverage.issue_numbers[0]: item.artifact_id for item in first} == {
+        item.coverage.issue_numbers[0]: item.artifact_id for item in reordered
+    }
+
+
+def test_search_parser_ignores_links_outside_post_title_after_void_element() -> None:
+    html = """
+    <h1 class="search-title">Search Result</h1>
+    <article class="post-title">
+      <a href="https://getcomics.org/dc/example-1/">Example #1 (2026)</a><br>
+    </article>
+    <nav><a href="https://getcomics.org/navigation/">Navigation</a></nav>
+    """
+
+    candidates = parse_search_html(html, source_domain="getcomics.org")
+
+    assert [item.display_title for item in candidates] == ["Example #1 (2026)"]
+
+
+def test_search_parser_deduplicates_query_variants_by_candidate_identity() -> None:
+    html = """
+    <h1 class="search-title">Search Result</h1>
+    <article class="post-title">
+      <a href="https://getcomics.org/dc/example-1/?utm_source=one">Example #1 (2026)</a>
+      <a href="https://getcomics.org/dc/example-1/?utm_source=two">Example #1 (2026)</a>
+    </article>
+    """
+
+    candidates = parse_search_html(html, source_domain="getcomics.org")
+
+    assert len(candidates) == 1
+    assert candidates[0].source_reference == "https://getcomics.org/dc/example-1/"
+
+
+def test_search_parser_rejects_any_source_url_userinfo() -> None:
+    html = """
+    <h1 class="search-title">Search Result</h1>
+    <article class="post-title">
+      <a href="https://:source-secret@getcomics.org/dc/example-1/">Example #1 (2026)</a>
+    </article>
+    """
+
+    assert parse_search_html(html, source_domain="getcomics.org") == []
