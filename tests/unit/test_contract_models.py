@@ -23,6 +23,25 @@ def test_contract_accepts_additive_unknown_optional_fields() -> None:
     assert request.protocol_version == "direct-download-provider/v1"
 
 
+def test_search_intent_preserves_collection_title_and_distinct_years() -> None:
+    intent = SearchIntent(
+        series_title="Immortal Thor",
+        normalized_title="immortal thor",
+        issue_number="3",
+        issue_type="volume",
+        volume="3",
+        issue_title="Vol. 3: The End of All Songs",
+        series_year=2024,
+        release_year=2025,
+        year=2025,
+    )
+
+    assert intent.issue_title == "Vol. 3: The End of All Songs"
+    assert intent.series_year == 2024
+    assert intent.release_year == 2025
+    assert intent.year == 2025
+
+
 def test_contract_rejects_invalid_request_id() -> None:
     with pytest.raises(ValidationError):
         SearchRequest.model_validate(search_payload(request_id="not-a-uuid"))

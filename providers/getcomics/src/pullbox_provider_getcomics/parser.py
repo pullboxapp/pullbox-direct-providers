@@ -202,12 +202,10 @@ def parse_release_html(
         group_text = " ".join(group.text_parts)
         title = _release_title(group.text_parts, source_url)
         evidence = parse_comic_title(_QUALITY_VARIANT.sub(" ", title))
+        size_bytes = _parse_size(group_text)
         artifacts.append(
             Artifact(
-                artifact_id=_identity(
-                    "artifact",
-                    f"{source_url}:{title}:{'|'.join(sorted(item.mirror_id for item in mirrors))}",
-                ),
+                artifact_id=_identity("artifact", f"{source_url}:{title}"),
                 coverage=ArtifactCoverage(
                     issue_numbers=list(evidence.issue_numbers),
                     volume=evidence.volume,
@@ -216,7 +214,8 @@ def parse_release_html(
                 route=ArtifactRoute.DIRECT_ARTIFACT,
                 format=evidence.format,
                 language="en",
-                size_bytes=_parse_size(group_text),
+                size_bytes=size_bytes,
+                size_is_estimate=size_bytes is not None,
                 mirrors=mirrors,
             )
         )

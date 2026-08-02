@@ -101,6 +101,9 @@ class SearchIntent(ContractModel):
     issue_number: str | None = Field(default=None, max_length=50)
     issue_type: str | None = Field(default=None, max_length=40)
     volume: str | None = Field(default=None, max_length=100)
+    issue_title: str | None = Field(default=None, max_length=500)
+    series_year: int | None = Field(default=None, ge=1800, le=2200)
+    release_year: int | None = Field(default=None, ge=1800, le=2200)
     year: int | None = Field(default=None, ge=1800, le=2200)
     publisher: str | None = Field(default=None, max_length=300)
     language: str | None = Field(default=None, max_length=20)
@@ -202,6 +205,7 @@ class Artifact(ContractModel):
     edition: str | None = None
     release_group: str | None = None
     size_bytes: int | None = Field(default=None, ge=0)
+    size_is_estimate: bool = False
     mirrors: list[Mirror] = Field(default_factory=list, max_length=50)
     magnet_uri: str | None = None
     limitations: list[str] = Field(default_factory=list)

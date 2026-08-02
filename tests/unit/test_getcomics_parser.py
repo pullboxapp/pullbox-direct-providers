@@ -232,6 +232,60 @@ def test_release_parser_keeps_mirror_identity_stable_after_redirect_resolution()
     assert first[0].mirrors[0].mirror_id == second[0].mirrors[0].mirror_id
 
 
+def test_release_artifact_identity_survives_partial_mirror_resolution() -> None:
+    pixeldrain = "https://getcomics.org/dls/pixel"
+    mediafire = "https://getcomics.org/dls/mediafire"
+    html = f"""
+    <html><body><section class="post-contents">
+      <p>Black Science Compendium (TPB) (SD-Digital)<br>
+        Language : English | Year : 2023 | Size : 651 MB</p>
+      <a class="aio-red" title="PIXELDRAIN" href="{pixeldrain}">PixelDrain</a>
+      <a class="aio-red" title="MEDIAFIRE" href="{mediafire}">MediaFire</a>
+    </section></body></html>
+    """
+
+    complete = parse_release_html(
+        html,
+        source_url="https://getcomics.org/other-comics/black-science-compendium-tpb-2023/",
+        resolved_links={
+            pixeldrain: "https://pixeldrain.com/u/black-science",
+            mediafire: "https://www.mediafire.com/file/black-science/file",
+        },
+        require_resolved_source_links=True,
+    )
+    partial = parse_release_html(
+        html,
+        source_url="https://getcomics.org/other-comics/black-science-compendium-tpb-2023/",
+        resolved_links={
+            pixeldrain: None,
+            mediafire: "https://www.mediafire.com/file/black-science/file",
+        },
+        require_resolved_source_links=True,
+    )
+
+    assert complete[0].artifact_id == partial[0].artifact_id
+    assert [mirror.host_kind for mirror in partial[0].mirrors] == ["mediafire"]
+
+
+def test_release_parser_marks_display_size_as_estimated() -> None:
+    html = """
+    <html><body><section class="post-contents">
+      <p>Black Science Compendium (TPB) (SD-Digital)<br>
+        Language : English | Year : 2023 | Size : 651 MB</p>
+      <a class="aio-red" title="MEDIAFIRE"
+         href="https://www.mediafire.com/file/black-science/file">MediaFire</a>
+    </section></body></html>
+    """
+
+    artifact = parse_release_html(
+        html,
+        source_url="https://getcomics.org/other-comics/black-science-compendium-tpb-2023/",
+    )[0]
+
+    assert artifact.size_bytes == 651 * 1024 * 1024
+    assert artifact.size_is_estimate is True
+
+
 def test_release_artifact_identity_is_stable_when_groups_reorder() -> None:
     first_group = """
       <p>Example Heroes #1 (2026)</p>

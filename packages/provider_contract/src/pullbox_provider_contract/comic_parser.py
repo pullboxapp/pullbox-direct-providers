@@ -18,6 +18,10 @@ _HASH_RANGE = re.compile(
 )
 _HASH_ISSUE = re.compile(r"\s+#\s*(?P<issue>\d+(?:\.\d+)?[A-Za-z]?)\s*$")
 _TRAILING_ISSUE = re.compile(r"\s+(?P<issue>\d{1,5}(?:\.\d+)?[A-Za-z]?)\s*$")
+_SCENE_NO_ISSUE = re.compile(
+    r"^(?:(?P<group>[a-z][a-z0-9]{1,15})-(?P<group_series>[A-Z].+?)|(?P<series>.+?))"
+    r"[._\s]+(?i:No)\.?[._\s]*(?P<issue>\d{1,5}(?:\.\d+)?[A-Za-z]?)\s*$"
+)
 _EXTENSION = re.compile(r"\.(?P<extension>cbz|cbr|cb7|pdf)\s*$", re.IGNORECASE)
 _SPACE = re.compile(r"\s+")
 
@@ -29,6 +33,7 @@ class ComicTitleEvidence:
     volume: str | None
     year: int | None
     format: str | None
+    release_group: str | None = None
 
 
 def parse_comic_title(raw_title: str) -> ComicTitleEvidence:
@@ -56,6 +61,14 @@ def parse_comic_title(raw_title: str) -> ComicTitleEvidence:
         working = f"{working[: volume_match.start()]} {working[volume_match.end() :]}".strip()
 
     issue_numbers: tuple[str, ...] = ()
+    release_group: str | None = None
+    scene_match = _SCENE_NO_ISSUE.fullmatch(working)
+    if scene_match:
+        release_group = scene_match.group("group")
+        series = scene_match.group("group_series") or scene_match.group("series")
+        working = _SPACE.sub(" ", re.sub(r"[._]+", " ", series)).strip()
+        issue_numbers = (_normalize_issue(scene_match.group("issue")),)
+
     range_match = _HASH_RANGE.search(working)
     if range_match:
         start_value = range_match.group("start")
@@ -79,6 +92,7 @@ def parse_comic_title(raw_title: str) -> ComicTitleEvidence:
         volume=volume,
         year=year,
         format=format_value,
+        release_group=release_group,
     )
 
 

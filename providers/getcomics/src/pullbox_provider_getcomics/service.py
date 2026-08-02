@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlencode
 
 from pullbox_provider_contract.models import Artifact, Candidate, SearchIntent
+from pullbox_provider_contract.search_terms import collection_title_fragment, is_collection_intent
 from pullbox_provider_contract.source_http import fetch_source_html, resolve_source_redirect
 
 from pullbox_provider_getcomics.parser import (
@@ -48,6 +49,8 @@ class GetComicsProviderService:
         limit: int,
         resolver_profile: ResolverProfile | None = None,
     ) -> list[Candidate]:
+        candidates: list[Candidate] = []
+        seen_candidate_ids: set[str] = set()
         for query in _build_queries(intent):
             url = f"{_BASE_URL}/?{urlencode({'s': query})}"
             html = await self._page_fetcher(
@@ -55,10 +58,12 @@ class GetComicsProviderService:
                 declared_domains=(_DOMAIN,),
                 resolver_profile=resolver_profile,
             )
-            candidates = parse_search_html(html, source_domain=_DOMAIN)
-            if candidates:
-                return candidates[:limit]
-        return []
+            for candidate in parse_search_html(html, source_domain=_DOMAIN):
+                if candidate.provider_candidate_id in seen_candidate_ids:
+                    continue
+                seen_candidate_ids.add(candidate.provider_candidate_id)
+                candidates.append(candidate)
+        return candidates[:limit]
 
     async def resolve(
         self,
@@ -119,16 +124,37 @@ def _build_query(intent: SearchIntent) -> str:
 
 
 def _build_queries(intent: SearchIntent) -> list[str]:
-    queries = [_build_query(intent)]
-    if intent.volume is not None and intent.issue_number:
+    title_fragment = collection_title_fragment(intent.issue_title)
+    if not is_collection_intent(intent.issue_type) or title_fragment is None:
+        queries = [_build_query(intent)]
+    else:
+        queries = [f"{intent.series_title} {title_fragment}"[:700]]
+        volume = intent.volume or intent.issue_number
+        if volume:
+            queries.append(f"{intent.series_title} Vol {volume}"[:700])
+            if intent.issue_type == "volume":
+                queries.append(f"{intent.series_title} Volume {volume}"[:700])
+
+    if is_collection_intent(intent.issue_type) and intent.volume is not None:
         fallback = " ".join(
             part
-            for part in (intent.series_title, str(intent.year) if intent.year else None)
+            for part in (
+                intent.series_title,
+                (
+                    str(intent.release_year or intent.year)
+                    if (intent.release_year or intent.year)
+                    else None
+                ),
+            )
             if part
         )[:700]
         if fallback not in queries:
             queries.append(fallback)
-    return queries
+        if intent.series_year and intent.series_year != (intent.release_year or intent.year):
+            series_fallback = f"{intent.series_title} {intent.series_year}"[:700]
+            if series_fallback not in queries:
+                queries.append(series_fallback)
+    return queries[:5]
 
 
 def _candidate_url(candidate_id: str) -> str:

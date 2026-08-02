@@ -20,6 +20,7 @@ from pullbox_provider_contract.models import (
     QuotaStatus,
     SearchIntent,
 )
+from pullbox_provider_contract.search_terms import collection_title_fragment, is_collection_intent
 from pullbox_provider_contract.source_http import fetch_source_html
 
 from pullbox_provider_annas_archive.parser import parse_search_html
@@ -274,6 +275,16 @@ def _candidate_md5(candidate_id: str) -> str:
 
 
 def _build_query(intent: SearchIntent) -> str:
+    if is_collection_intent(intent.issue_type):
+        title_fragment = collection_title_fragment(intent.issue_title)
+        if title_fragment:
+            return f"{intent.series_title} {title_fragment}"[:700]
+        volume = intent.volume or intent.issue_number
+        if volume:
+            parts = [intent.series_title, "Vol", volume]
+            if intent.release_year or intent.year:
+                parts.append(str(intent.release_year or intent.year))
+            return " ".join(parts)[:700]
     parts = [intent.series_title]
     if intent.issue_number:
         parts.append(intent.issue_number)

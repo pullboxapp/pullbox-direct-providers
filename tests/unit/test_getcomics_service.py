@@ -98,6 +98,51 @@ async def test_service_retries_collection_search_without_synthetic_issue_number(
     assert "East+of+West%3A+The+End+Times+Compendium+2025" in urls[1]
 
 
+async def test_collection_search_prioritizes_issue_title_and_keeps_later_exact_candidate() -> None:
+    urls: list[str] = []
+
+    def search_html(title: str, slug: str) -> str:
+        return f"""
+        <html><body>
+          <h1 class="search-title">Search Result</h1>
+          <article><h1 class="post-title">
+            <a href="https://getcomics.org/marvel/{slug}/">{title}</a>
+          </h1></article>
+        </body></html>
+        """
+
+    async def pages(url: str, **_kwargs: object) -> str:
+        urls.append(url)
+        if "The+End+of+All+Songs" in url:
+            return search_html("Immortal Thor 003 (2023)", "immortal-thor-003")
+        if "Immortal+Thor+Vol+3" in url:
+            return search_html(
+                "Immortal Thor Vol. 3 - The End Of All Songs (TPB) (2025)",
+                "immortal-thor-vol-3-the-end-of-all-songs",
+            )
+        return '<html><body><h1 class="search-title">Search Result</h1></body></html>'
+
+    service = GetComicsProviderService(page_fetcher=pages)
+    candidates = await service.search(
+        SearchIntent(
+            series_title="Immortal Thor",
+            normalized_title="immortal thor",
+            issue_number="3",
+            issue_type="volume",
+            volume="3",
+            issue_title="Vol. 3: The End of All Songs",
+            series_year=2024,
+            release_year=2024,
+            year=2024,
+        ),
+        limit=10,
+    )
+
+    assert "Immortal+Thor+Vol+3+The+End+of+All+Songs" in urls[0]
+    assert 2 <= len(urls) <= 5
+    assert any("The End Of All Songs" in candidate.display_title for candidate in candidates)
+
+
 async def test_service_does_not_broaden_empty_standard_issue_search() -> None:
     urls: list[str] = []
 

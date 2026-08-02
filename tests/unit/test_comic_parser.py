@@ -11,3 +11,12 @@ def test_decimal_ranges_are_not_coerced_into_integer_issue_coverage() -> None:
     assert first.issue_numbers == ()
     assert second.series_title == "Example Heroes"
     assert second.issue_numbers == ()
+
+
+def test_scene_style_numbered_pdf_extracts_group_series_and_issue() -> None:
+    evidence = parse_comic_title("bb-Sacrificers.No.7.pdf")
+
+    assert evidence.series_title == "Sacrificers"
+    assert evidence.issue_numbers == ("7",)
+    assert evidence.release_group == "bb"
+    assert evidence.format == "pdf"

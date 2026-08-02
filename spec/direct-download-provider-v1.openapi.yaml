@@ -299,6 +299,17 @@ components:
           type: [string, "null"]
         volume:
           type: [string, "null"]
+        issue_title:
+          type: [string, "null"]
+          maxLength: 500
+        series_year:
+          type: [integer, "null"]
+          minimum: 1800
+          maximum: 2200
+        release_year:
+          type: [integer, "null"]
+          minimum: 1800
+          maximum: 2200
         year:
           type: [integer, "null"]
           minimum: 1800

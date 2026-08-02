@@ -248,6 +248,34 @@ async def test_search_uses_the_selected_official_domain_only() -> None:
     ]
 
 
+async def test_collection_search_uses_meaningful_issue_title_without_ambiguous_year() -> None:
+    requested: list[str] = []
+
+    async def page(url: str, **_kwargs: object) -> str:
+        requested.append(url)
+        return (FIXTURES / "search-results.html").read_text(encoding="utf-8")
+
+    service = AnnasArchiveProviderService(page_fetcher=page)
+    await service.search(
+        SearchIntent(
+            series_title="Immortal Thor",
+            normalized_title="immortal thor",
+            issue_number="3",
+            issue_type="volume",
+            volume="3",
+            issue_title="Vol. 3: The End of All Songs",
+            series_year=2024,
+            release_year=2024,
+            year=2024,
+        ),
+        provider_config={"domain": "https://annas-archive.gd"},
+        limit=20,
+    )
+
+    assert len(requested) == 1
+    assert "q=Immortal+Thor+Vol+3+The+End+of+All+Songs&ext=cbz&ext=cbr&ext=pdf" in requested[0]
+
+
 async def test_empty_successful_fast_download_response_fails_closed() -> None:
     async def empty(**_kwargs: object) -> tuple[int, dict[str, object]]:
         return 204, {}

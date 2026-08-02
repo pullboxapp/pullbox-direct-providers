@@ -96,6 +96,7 @@ def parse_search_html(html: str, *, source_domain: str) -> list[Candidate]:
                     volume=evidence.volume,
                     year=evidence.year,
                     format=evidence.format,
+                    release_group=evidence.release_group,
                 ),
                 provider_confidence=_parse_confidence(evidence.issue_numbers, evidence.year),
                 provenance={"layout": "search-v1", "source_kind": "metadata"},
