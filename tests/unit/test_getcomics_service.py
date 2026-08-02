@@ -143,6 +143,32 @@ async def test_collection_search_prioritizes_issue_title_and_keeps_later_exact_c
     assert any("The End Of All Songs" in candidate.display_title for candidate in candidates)
 
 
+async def test_collection_search_uses_explicit_volume_for_generic_issue_title() -> None:
+    urls: list[str] = []
+
+    async def pages(url: str, **_kwargs: object) -> str:
+        urls.append(url)
+        return '<html><body><h1 class="search-title">Search Result</h1></body></html>'
+
+    service = GetComicsProviderService(page_fetcher=pages)
+    await service.search(
+        SearchIntent(
+            series_title="Clean Room: Exile",
+            normalized_title="clean room exile",
+            issue_number="1",
+            issue_type="volume",
+            volume="1",
+            issue_title="Volume 2",
+            series_year=2016,
+            release_year=2016,
+            year=2016,
+        ),
+        limit=10,
+    )
+
+    assert any("Clean+Room%3A+Exile+Vol+2" in url for url in urls)
+
+
 async def test_service_does_not_broaden_empty_standard_issue_search() -> None:
     urls: list[str] = []
 

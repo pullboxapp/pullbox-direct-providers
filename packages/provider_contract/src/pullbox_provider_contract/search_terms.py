@@ -58,3 +58,12 @@ def collection_title_fragment(value: str | None) -> str | None:
     label = prefix.group("label").casefold()
     canonical_label = "Vol" if label.startswith("vol") else label.title()
     return " ".join((canonical_label, prefix.group("number"), subtitle))
+
+
+def collection_title_number(value: str | None) -> str | None:
+    """Return an explicit collection ordinal even when the title has no subtitle."""
+    title = re.sub(r"\s+", " ", value or "").strip()
+    if not title:
+        return None
+    prefix = _COLLECTION_PREFIX_RE.match(title)
+    return prefix.group("number") if prefix is not None else None

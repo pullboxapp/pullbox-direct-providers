@@ -10,7 +10,11 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlencode
 
 from pullbox_provider_contract.models import Artifact, Candidate, SearchIntent
-from pullbox_provider_contract.search_terms import collection_title_fragment, is_collection_intent
+from pullbox_provider_contract.search_terms import (
+    collection_title_fragment,
+    collection_title_number,
+    is_collection_intent,
+)
 from pullbox_provider_contract.source_http import fetch_source_html, resolve_source_redirect
 
 from pullbox_provider_getcomics.parser import (
@@ -125,6 +129,7 @@ def _build_query(intent: SearchIntent) -> str:
 
 def _build_queries(intent: SearchIntent) -> list[str]:
     title_fragment = collection_title_fragment(intent.issue_title)
+    explicit_title_volume = collection_title_number(intent.issue_title)
     if not is_collection_intent(intent.issue_type) or title_fragment is None:
         queries = [_build_query(intent)]
     else:
@@ -134,6 +139,13 @@ def _build_queries(intent: SearchIntent) -> list[str]:
             queries.append(f"{intent.series_title} Vol {volume}"[:700])
             if intent.issue_type == "volume":
                 queries.append(f"{intent.series_title} Volume {volume}"[:700])
+
+    if is_collection_intent(intent.issue_type) and explicit_title_volume is not None:
+        volume = explicit_title_volume
+        for label in ("Vol", "Volume"):
+            query = f"{intent.series_title} {label} {volume}"[:700]
+            if query not in queries:
+                queries.append(query)
 
     if is_collection_intent(intent.issue_type) and intent.volume is not None:
         fallback = " ".join(
