@@ -80,6 +80,32 @@ def test_release_parser_keeps_nested_collection_artifacts_independent() -> None:
     assert [mirror.host_kind for mirror in artifacts[1].mirrors] == ["pixeldrain", "mega"]
 
 
+def test_release_parser_labels_title_only_quality_variants_with_common_coverage() -> None:
+    html = """
+    <html><body><section class="post-contents">
+      <p><strong>Black Science Compendium (TPB) (HD-Digital)</strong><br>
+        Language : English | Year : 2023 | Size : 1.9 GB</p>
+      <a class="aio-red" title="PIXELDRAIN" href="https://pixeldrain.com/u/hd">HD</a>
+      <p><strong>Black Science Compendium (TPB) (SD-Digital)</strong><br>
+        Language : English | Year : 2023 | Size : 651 MB</p>
+      <a class="aio-red" title="MEGA" href="https://mega.nz/file/sd#key">SD</a>
+    </section></body></html>
+    """
+
+    artifacts = parse_release_html(
+        html,
+        source_url="https://getcomics.org/other-comics/black-science-compendium-tpb-2023/",
+    )
+
+    assert len(artifacts) == 2
+    assert [artifact.coverage.description for artifact in artifacts] == [
+        "Black Science Compendium",
+        "Black Science Compendium",
+    ]
+    assert all(not artifact.coverage.issue_numbers for artifact in artifacts)
+    assert all(artifact.coverage.volume is None for artifact in artifacts)
+
+
 def test_search_parser_accepts_real_empty_results_but_fails_closed_on_layout_drift() -> None:
     assert (
         parse_search_html(

@@ -60,6 +60,64 @@ async def test_service_builds_bounded_search_and_resolves_stateless_candidate() 
     assert pages.urls[1] == candidates[0].source_reference
 
 
+async def test_service_retries_collection_search_without_synthetic_issue_number() -> None:
+    urls: list[str] = []
+
+    async def pages(url: str, **_kwargs: object) -> str:
+        urls.append(url)
+        if "+1+2025" in url:
+            return '<html><body><h1 class="search-title">Search Result</h1></body></html>'
+        return """
+        <html><body>
+          <h1 class="search-title">Search Result</h1>
+          <article><h1 class="post-title">
+            <a href="https://getcomics.org/other-comics/east-of-west-the-end-times-compendium-2025/">
+              East of West - The End Times Compendium (2025)
+            </a>
+          </h1></article>
+        </body></html>
+        """
+
+    service = GetComicsProviderService(page_fetcher=pages)
+    intent = SearchIntent(
+        series_title="East of West: The End Times Compendium",
+        normalized_title="east of west the end times compendium",
+        issue_number="1",
+        issue_type="compendium",
+        volume="1",
+        year=2025,
+    )
+
+    candidates = await service.search(intent, limit=10)
+
+    assert [candidate.display_title for candidate in candidates] == [
+        "East of West - The End Times Compendium (2025)"
+    ]
+    assert len(urls) == 2
+    assert "East+of+West%3A+The+End+Times+Compendium+1+2025" in urls[0]
+    assert "East+of+West%3A+The+End+Times+Compendium+2025" in urls[1]
+
+
+async def test_service_does_not_broaden_empty_standard_issue_search() -> None:
+    urls: list[str] = []
+
+    async def pages(url: str, **_kwargs: object) -> str:
+        urls.append(url)
+        return '<html><body><h1 class="search-title">Search Result</h1></body></html>'
+
+    service = GetComicsProviderService(page_fetcher=pages)
+    intent = SearchIntent(
+        series_title="Example Heroes",
+        normalized_title="example heroes",
+        issue_number="7",
+        issue_type="issue",
+        year=2026,
+    )
+
+    assert await service.search(intent, limit=10) == []
+    assert len(urls) == 1
+
+
 async def test_service_rejects_forged_candidate_identifier() -> None:
     service = GetComicsProviderService(page_fetcher=_Pages())
 

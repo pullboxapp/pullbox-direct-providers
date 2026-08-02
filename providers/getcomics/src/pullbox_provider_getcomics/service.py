@@ -48,14 +48,17 @@ class GetComicsProviderService:
         limit: int,
         resolver_profile: ResolverProfile | None = None,
     ) -> list[Candidate]:
-        query = _build_query(intent)
-        url = f"{_BASE_URL}/?{urlencode({'s': query})}"
-        html = await self._page_fetcher(
-            url,
-            declared_domains=(_DOMAIN,),
-            resolver_profile=resolver_profile,
-        )
-        return parse_search_html(html, source_domain=_DOMAIN)[:limit]
+        for query in _build_queries(intent):
+            url = f"{_BASE_URL}/?{urlencode({'s': query})}"
+            html = await self._page_fetcher(
+                url,
+                declared_domains=(_DOMAIN,),
+                resolver_profile=resolver_profile,
+            )
+            candidates = parse_search_html(html, source_domain=_DOMAIN)
+            if candidates:
+                return candidates[:limit]
+        return []
 
     async def resolve(
         self,
@@ -113,6 +116,19 @@ def _build_query(intent: SearchIntent) -> str:
     if intent.year:
         parts.append(str(intent.year))
     return " ".join(parts)[:700]
+
+
+def _build_queries(intent: SearchIntent) -> list[str]:
+    queries = [_build_query(intent)]
+    if intent.volume is not None and intent.issue_number:
+        fallback = " ".join(
+            part
+            for part in (intent.series_title, str(intent.year) if intent.year else None)
+            if part
+        )[:700]
+        if fallback not in queries:
+            queries.append(fallback)
+    return queries
 
 
 def _candidate_url(candidate_id: str) -> str:

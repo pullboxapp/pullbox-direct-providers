@@ -21,6 +21,12 @@ from pullbox_provider_contract.models import (
 )
 
 _SIZE = re.compile(r"\bSize\s*:\s*(\d+(?:\.\d+)?)\s*(KB|MB|GB)\b", re.IGNORECASE)
+_QUALITY_VARIANT = re.compile(r"\s*\((?:HD|SD)[-\s]*Digital\)\s*", re.IGNORECASE)
+_CONTROL_PREFIX = re.compile(
+    r"^(?:(?:DOWNLOAD NOW|READ ONLINE|PIXELDRAIN|MEGA|MEGANZ|ROOTZ|MEDIAFIRE|"
+    r"TERABOX|DATANODES)\s+)+",
+    re.IGNORECASE,
+)
 _IGNORED_TITLES = frozenset({"READ ONLINE", "VIKINGFILE"})
 _VOID_TAGS = frozenset(
     {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source"}
@@ -194,8 +200,8 @@ def parse_release_html(
         if not mirrors:
             continue
         group_text = " ".join(group.text_parts)
-        title = _release_title(group_text, source_url)
-        evidence = parse_comic_title(title)
+        title = _release_title(group.text_parts, source_url)
+        evidence = parse_comic_title(_QUALITY_VARIANT.sub(" ", title))
         artifacts.append(
             Artifact(
                 artifact_id=_identity(
@@ -205,6 +211,7 @@ def parse_release_html(
                 coverage=ArtifactCoverage(
                     issue_numbers=list(evidence.issue_numbers),
                     volume=evidence.volume,
+                    description=evidence.series_title,
                 ),
                 route=ArtifactRoute.DIRECT_ARTIFACT,
                 format=evidence.format,
@@ -276,7 +283,21 @@ def _parse(html: str) -> _DocumentParser:
     return parser
 
 
-def _release_title(page_text: str, source_url: str) -> str:
+def _release_title(text_parts: list[str], source_url: str) -> str:
+    for text in reversed(text_parts):
+        if not _looks_like_release_metadata(text):
+            continue
+        cleaned = _CONTROL_PREFIX.sub("", text.strip())
+        metadata = re.split(
+            r"\b(?:Language|Image\s+Format|Year|Size)\s*:",
+            cleaned,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0].strip(" -\u2013|")
+        if metadata:
+            return metadata
+
+    page_text = " ".join(text_parts)
     match = re.search(
         r"The Story\s*[-\u2013]\s*(.+?)(?:Language\s*:|$)",
         page_text,
