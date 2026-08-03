@@ -89,7 +89,9 @@ are recorded in an expiring reviewed baseline under
 `.github/security/container-vulnerability-baseline.json`. New findings fail the
 build, removed findings disappear automatically, and the baseline must be
 reviewed before its expiry date. Complete scanner reports are retained as CI
-artifacts and trusted runs upload SARIF to GitHub Security.
+artifacts. Trusted runs upload only unreviewed High or Critical findings to
+GitHub Security, so the code-scanning dashboard stays actionable while the
+expiring baseline remains the audit trail for accepted upstream risk.
 
 Tags matching `synthetic-v*` can publish a signed, multi-arch reference image
 to GHCR with SBOM and provenance attestations. That image is a protocol test
