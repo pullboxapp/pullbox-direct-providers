@@ -256,6 +256,9 @@ def test_provider_release_validates_before_tagging_and_preserves_supply_chain_da
     assert "image-tags" in promote_text
     assert jobs["promote"]["needs"] == ["prepare", "publish", "sign"]
     assert "type=raw,value=latest" not in text
+    assert (
+        "type=sha,format=short,prefix=sha-,enable=${{ steps.release.outputs.is-release == 'true' }}"
+    ) in text
 
 
 def test_provider_release_signs_and_verifies_both_registry_digests() -> None:

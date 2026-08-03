@@ -86,7 +86,7 @@ jobs:
             ${{ steps.release.outputs.dockerhub-image }}
           tags: |
             type=raw,value=${{ steps.release.outputs.version }}
-            type=sha,format=short,prefix=sha-
+            type=sha,format=short,prefix=sha-,enable=${{ steps.release.outputs.is-release == 'true' }}
           labels: |
             org.opencontainers.image.title=${{ steps.release.outputs.title }}
             org.opencontainers.image.description=${{ steps.release.outputs.description }}
