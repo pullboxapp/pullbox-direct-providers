@@ -12,11 +12,12 @@ _FORMAT = re.compile(
     re.IGNORECASE,
 )
 _VOLUME = re.compile(r"\bvol(?:ume)?\.?\s*(?P<volume>\d+)\b", re.IGNORECASE)
+_TRAILING_RELEASE_LABELS = r"(?:\s+\([^()\r\n]{1,100}\))*"
 _HASH_RANGE = re.compile(
     r"\s+#?\s*(?P<start>\d+(?:\.\d+)?)\s*[-\u2013]\s*#?\s*"
-    r"(?P<end>\d+(?:\.\d+)?)\s*$"
+    rf"(?P<end>\d+(?:\.\d+)?){_TRAILING_RELEASE_LABELS}\s*$"
 )
-_HASH_ISSUE = re.compile(r"\s+#\s*(?P<issue>\d+(?:\.\d+)?[A-Za-z]?)\s*$")
+_HASH_ISSUE = re.compile(rf"\s+#\s*(?P<issue>\d+(?:\.\d+)?[A-Za-z]?){_TRAILING_RELEASE_LABELS}\s*$")
 _TRAILING_ISSUE = re.compile(r"\s+(?P<issue>\d{1,5}(?:\.\d+)?[A-Za-z]?)\s*$")
 _SCENE_NO_ISSUE = re.compile(
     r"^(?:(?P<group>[a-z][a-z0-9]{1,15})-(?P<group_series>[A-Z].+?)|(?P<series>.+?))"

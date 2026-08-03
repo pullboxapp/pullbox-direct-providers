@@ -24,7 +24,7 @@ _SIZE = re.compile(r"\bSize\s*:\s*(\d+(?:\.\d+)?)\s*(KB|MB|GB)\b", re.IGNORECASE
 _QUALITY_VARIANT = re.compile(r"\s*\((?:HD|SD)[-\s]*Digital\)\s*", re.IGNORECASE)
 _CONTROL_PREFIX = re.compile(
     r"^(?:(?:DOWNLOAD NOW|READ ONLINE|PIXELDRAIN|MEGA|MEGANZ|ROOTZ|MEDIAFIRE|"
-    r"TERABOX|DATANODES)\s+)+",
+    r"TERABOX|DATANODES|VIKINGFILE)\s+)+",
     re.IGNORECASE,
 )
 _IGNORED_TITLES = frozenset({"READ ONLINE", "VIKINGFILE"})

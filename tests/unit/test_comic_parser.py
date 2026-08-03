@@ -20,3 +20,10 @@ def test_scene_style_numbered_pdf_extracts_group_series_and_issue() -> None:
     assert evidence.issue_numbers == ("7",)
     assert evidence.release_group == "bb"
     assert evidence.format == "pdf"
+
+
+def test_explicit_issue_before_release_group_keeps_issue_coverage() -> None:
+    evidence = parse_comic_title("War Wolf #2 (Empire)")
+
+    assert evidence.series_title == "War Wolf"
+    assert evidence.issue_numbers == ("2",)

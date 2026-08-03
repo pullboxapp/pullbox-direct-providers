@@ -51,6 +51,32 @@ def test_release_parser_groups_supported_mirrors_and_excludes_non_downloads() ->
     assert all(mirror.source_headers == {} for mirror in artifact.mirrors)
 
 
+def test_release_parser_keeps_issue_coverage_before_release_group_labels() -> None:
+    html = """
+    <html><body><section class="post-contents">
+      <p><strong>War Wolf #2 (Empire)</strong><br>
+        Language : English | Year : 2025 | Size : 68 MB</p>
+      <a class="aio-red" title="PIXELDRAIN" href="https://pixeldrain.com/u/empire">
+        PIXELDRAIN
+      </a>
+      <p><strong>War Wolf #2 (LeDuch)</strong><br>
+        Language : English | Year : 2025 | Size : 66 MB</p>
+      <a class="aio-purple" title="VIKINGFILE" href="https://vikingfile.com/f/retired">
+        VIKINGFILE
+      </a>
+      <a class="aio-blue" title="MEGA" href="https://mega.nz/file/leduch#key">MEGA</a>
+    </section></body></html>
+    """
+
+    artifacts = parse_release_html(
+        html,
+        source_url="https://getcomics.org/other-comics/war-wolf-2-2025/",
+    )
+
+    assert [artifact.coverage.issue_numbers for artifact in artifacts] == [["2"], ["2"]]
+    assert [artifact.coverage.description for artifact in artifacts] == ["War Wolf", "War Wolf"]
+
+
 def test_release_parser_keeps_nested_collection_artifacts_independent() -> None:
     html = """
     <html><body><section class="post-contents">
