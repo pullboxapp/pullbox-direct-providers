@@ -57,26 +57,44 @@ provider containers run Python 3.14.
 python3.12 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
 make validate
+make security-check
 make docker-conformance
-docker compose -p pullbox-provider-source-smoke \
-  -f docker/compose.providers-test.yml up --build --abort-on-container-exit \
-  --exit-code-from smoke
+make docker-source-smoke
 ```
 
 `make validate` runs Ruff, strict mypy, unit/conformance tests, and the 90%
 coverage gate. `make docker-conformance` builds the digest-pinned synthetic
 image and proves the protocol over an internal-only Docker network.
+`make security-check` runs Bandit and a strict dependency audit.
 
-The source-provider Compose harness builds both providers, waits for their
-authenticated health checks, and validates manifests over an internal-only
-network. It uses generated test credentials and performs no live source search
-or payload download. Live acceptance probes must remain metadata-only, use
-credentials supplied at runtime, and never persist signed URLs or account data.
+The source-provider Compose harness builds both providers, waits for
+process-only socket healthchecks, and validates authenticated manifests over an
+internal-only network. Process healthchecks intentionally do not call upstream
+sources. The harness uses generated test credentials and performs no live
+source search or payload download. Live acceptance probes must remain
+metadata-only, use credentials supplied at runtime, and never persist signed
+URLs or account data.
 
-CI also builds the synthetic reference image for Linux AMD64 and ARM64 without
-publishing it. Tags matching `synthetic-v*` can publish a signed, multi-arch
-reference image to GHCR with SBOM and provenance attestations. That image is a
-protocol test tool, not a comic discovery source and not a production provider.
+Pull requests run four stable aggregate checks: `CI Required`,
+`Security Required`, `Workflow Hygiene Required`, and
+`Container Security Required`. They run on GitHub-hosted runners with read-only
+default permissions. The security gate includes Gitleaks, strict Python
+dependency auditing, Bandit, dependency review, and CodeQL's extended security
+queries scoped to shipped provider code. Container checks build and smoke-test
+all three runtime images, scan them with Grype, and prove Linux AMD64 and ARM64
+builds without publishing.
+
+High and Critical findings inherited from the pinned public Python base image
+are recorded in an expiring reviewed baseline under
+`.github/security/container-vulnerability-baseline.json`. New findings fail the
+build, removed findings disappear automatically, and the baseline must be
+reviewed before its expiry date. Complete scanner reports are retained as CI
+artifacts and trusted runs upload SARIF to GitHub Security.
+
+Tags matching `synthetic-v*` can publish a signed, multi-arch reference image
+to GHCR with SBOM and provenance attestations. That image is a protocol test
+tool, not a comic discovery source and not a production provider. Publishing
+the GetComics and Anna's Archive images remains a DD-8 release gate.
 
 The local Docker harness intentionally publishes no host port. The provider
 runs as UID/GID `65532:65532` with a read-only root filesystem, a bounded

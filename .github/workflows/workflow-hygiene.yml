@@ -1,0 +1,78 @@
+name: Workflow Hygiene
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+  push:
+    branches:
+      - develop
+      - main
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provider-workflow-hygiene-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Validate GitHub Actions workflows
+        env:
+          ACTIONLINT_IMAGE: docker.io/rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --volume "$PWD:/repo" \
+            --workdir /repo \
+            "$ACTIONLINT_IMAGE" \
+            -shellcheck= -pyflakes=
+
+  contract-tests:
+    name: Workflow Contract Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14"
+          cache: pip
+      - name: Install development dependencies
+        run: python -m pip install '.[dev]'
+      - name: Verify workflow contracts
+        run: pytest tests/unit/test_workflow_contract.py tests/unit/test_vulnerability_baseline.py -q
+
+  required:
+    name: Workflow Hygiene Required
+    if: always()
+    needs:
+      - actionlint
+      - contract-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      ACTIONLINT_RESULT: ${{ needs.actionlint.result }}
+      CONTRACT_RESULT: ${{ needs.contract-tests.result }}
+    steps:
+      - name: Verify workflow hygiene jobs
+        run: |
+          if [[ "$ACTIONLINT_RESULT" != "success" || \
+                "$CONTRACT_RESULT" != "success" ]]; then
+            echo "One or more workflow hygiene checks failed."
+            exit 1
+          fi

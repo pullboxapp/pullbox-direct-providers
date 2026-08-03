@@ -1,0 +1,170 @@
+name: Container Security
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+  push:
+    branches:
+      - develop
+      - main
+  schedule:
+    - cron: "43 9 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provider-container-security-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  runtime-smoke:
+    name: Hardened Runtime Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Test synthetic private-network conformance
+        run: make docker-conformance
+      - name: Test source providers without external network access
+        run: make docker-source-smoke
+
+  image-scan:
+    name: Scan ${{ matrix.provider }} Image
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        provider:
+          - synthetic
+          - getcomics
+          - annas-archive
+        include:
+          - provider: synthetic
+            dockerfile: docker/Dockerfile.synthetic
+          - provider: getcomics
+            dockerfile: docker/Dockerfile.getcomics
+          - provider: annas-archive
+            dockerfile: docker/Dockerfile.annas-archive
+    env:
+      IMAGE: pullbox-provider-${{ matrix.provider }}:security-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Build final runtime image
+        run: |
+          docker build \
+            --file "${{ matrix.dockerfile }}" \
+            --target runtime \
+            --tag "${IMAGE}" \
+            .
+      - name: Produce machine-readable Grype report
+        id: scan-json
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          image: ${{ env.IMAGE }}
+          fail-build: false
+          severity-cutoff: negligible
+          output-format: json
+      - name: Reject unreviewed High or Critical findings
+        env:
+          GRYPE_REPORT: ${{ steps.scan-json.outputs.json }}
+        run: |
+          python .github/scripts/verify-container-vulnerability-baseline.py \
+            --report "$GRYPE_REPORT" \
+            --baseline .github/security/container-vulnerability-baseline.json \
+            --image "${{ matrix.provider }}"
+      - name: Produce SARIF report
+        id: scan-sarif
+        if: always()
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          image: ${{ env.IMAGE }}
+          fail-build: false
+          severity-cutoff: negligible
+          output-format: sarif
+      - name: Upload SARIF to GitHub Security
+        if: always() && steps.scan-sarif.outcome == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        with:
+          sarif_file: ${{ steps.scan-sarif.outputs.sarif }}
+          category: container-${{ matrix.provider }}
+      - name: Upload Grype JSON report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: grype-${{ matrix.provider }}-report
+          path: ${{ steps.scan-json.outputs.json }}
+          if-no-files-found: ignore
+          retention-days: 14
+
+  multiarch-build:
+    name: Build ${{ matrix.provider }} for AMD64 and ARM64
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        provider:
+          - synthetic
+          - getcomics
+          - annas-archive
+        include:
+          - provider: synthetic
+            dockerfile: docker/Dockerfile.synthetic
+          - provider: getcomics
+            dockerfile: docker/Dockerfile.getcomics
+          - provider: annas-archive
+            dockerfile: docker/Dockerfile.annas-archive
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        with:
+          platforms: arm64
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Build both supported architectures without publishing
+        run: |
+          docker buildx build \
+            --file "${{ matrix.dockerfile }}" \
+            --target runtime \
+            --platform linux/amd64,linux/arm64 \
+            --output "type=oci,dest=${RUNNER_TEMP}/${{ matrix.provider }}.oci" \
+            .
+
+  required:
+    name: Container Security Required
+    if: always()
+    needs:
+      - runtime-smoke
+      - image-scan
+      - multiarch-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      RUNTIME_RESULT: ${{ needs.runtime-smoke.result }}
+      SCAN_RESULT: ${{ needs.image-scan.result }}
+      MULTIARCH_RESULT: ${{ needs.multiarch-build.result }}
+    steps:
+      - name: Verify required container jobs
+        run: |
+          if [[ "$RUNTIME_RESULT" != "success" || \
+                "$SCAN_RESULT" != "success" || \
+                "$MULTIARCH_RESULT" != "success" ]]; then
+            echo "One or more required container checks failed."
+            exit 1
+          fi

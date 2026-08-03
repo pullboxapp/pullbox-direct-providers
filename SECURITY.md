@@ -27,3 +27,18 @@ downloads, archive validation, post-processing, history, and library state.
 The synthetic provider and fixtures contain generated test data only. Never
 commit source-account credentials, signed URLs, cookies, personal information,
 or downloaded publications to this repository.
+
+## Automated Security Gates
+
+Pull requests run secret scanning, strict Python dependency auditing, Bandit,
+dependency review, CodeQL extended security queries, workflow linting, runtime
+smoke tests, multi-architecture builds, and Grype image scans. Public and fork
+pull requests run on GitHub-hosted runners with read-only default permissions;
+pull request workflows do not publish images or receive registry credentials.
+
+The pinned Python base image currently has reviewed upstream findings that are
+tracked in `.github/security/container-vulnerability-baseline.json`. The
+baseline is not a suppression of scanner output: new High or Critical findings
+fail CI, full reports remain available, and every accepted entry requires a
+rationale and expiry date. Base image and dependency updates should remove
+entries as fixes become available.
