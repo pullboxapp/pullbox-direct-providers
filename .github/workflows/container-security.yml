@@ -96,10 +96,12 @@ jobs:
         id: filter-sarif
         if: always() && steps.scan-sarif.outcome == 'success'
         env:
+          GRYPE_REPORT: ${{ steps.scan-json.outputs.json }}
           GRYPE_SARIF: ${{ steps.scan-sarif.outputs.sarif }}
         run: |
           python .github/scripts/filter-reviewed-container-sarif.py \
             --sarif "$GRYPE_SARIF" \
+            --report "$GRYPE_REPORT" \
             --baseline .github/security/container-vulnerability-baseline.json \
             --image "${{ matrix.provider }}" \
             --output "${RUNNER_TEMP}/${{ matrix.provider }}-actionable.sarif"
