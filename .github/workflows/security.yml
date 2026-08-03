@@ -1,0 +1,176 @@
+name: Security
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+  push:
+    branches:
+      - develop
+      - main
+  schedule:
+    - cron: "17 9 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provider-security-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  gitleaks:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - name: Scan Git history for secrets
+        env:
+          GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --volume "$PWD:/repo" \
+            --workdir /repo \
+            "$GITLEAKS_IMAGE" \
+            git . \
+            --no-banner \
+            --redact \
+            --report-format sarif \
+            --report-path gitleaks.sarif
+      - name: Upload Gitleaks report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gitleaks-report
+          path: gitleaks.sarif
+          if-no-files-found: ignore
+          retention-days: 14
+
+  dependency-audit:
+    name: Python Dependency Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14"
+          cache: pip
+      - name: Install development dependencies
+        run: python -m pip install '.[dev]'
+      - name: Audit installed Python dependencies
+        run: pip-audit --strict . --format json --output pip-audit.json
+      - name: Upload dependency audit
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pip-audit-report
+          path: pip-audit.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  bandit:
+    name: Bandit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14"
+          cache: pip
+      - name: Install development dependencies
+        run: python -m pip install '.[dev]'
+      - name: Scan shipped Python code
+        run: bandit -r packages providers -ll -ii -f json -o bandit.json
+      - name: Upload Bandit report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bandit-report
+          path: bandit.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  dependency-review:
+    name: Dependency Review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Reject vulnerable dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: never
+
+  codeql:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        with:
+          languages: python
+          queries: +security-extended
+          config-file: ./.github/codeql/codeql-config.yml
+      - name: Analyze shipped provider code
+        uses: github/codeql-action/analyze@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        with:
+          category: /language:python
+
+  required:
+    name: Security Required
+    if: always()
+    needs:
+      - gitleaks
+      - dependency-audit
+      - bandit
+      - dependency-review
+      - codeql
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      GITLEAKS_RESULT: ${{ needs.gitleaks.result }}
+      DEPENDENCY_AUDIT_RESULT: ${{ needs.dependency-audit.result }}
+      BANDIT_RESULT: ${{ needs.bandit.result }}
+      DEPENDENCY_REVIEW_RESULT: ${{ needs.dependency-review.result }}
+      CODEQL_RESULT: ${{ needs.codeql.result }}
+    steps:
+      - name: Verify required security jobs
+        run: |
+          if [[ "$GITLEAKS_RESULT" != "success" || \
+                "$DEPENDENCY_AUDIT_RESULT" != "success" || \
+                "$BANDIT_RESULT" != "success" || \
+                "$CODEQL_RESULT" != "success" ]]; then
+            echo "One or more required security checks failed."
+            exit 1
+          fi
+          if [[ "$DEPENDENCY_REVIEW_RESULT" != "success" && \
+                "$DEPENDENCY_REVIEW_RESULT" != "skipped" ]]; then
+            echo "Dependency Review failed."
+            exit 1
+          fi

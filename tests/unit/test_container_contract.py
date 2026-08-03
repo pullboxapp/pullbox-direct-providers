@@ -15,6 +15,7 @@ SOURCE_DOCKERFILES = {
     ),
 }
 SOURCE_COMPOSE_FILE = ROOT / "docker" / "compose.providers-test.yml"
+SOURCE_SMOKE_SCRIPT = ROOT / "docker" / "provider_smoke.py"
 
 
 def test_runtime_uses_pinned_python_314_and_non_root_identity() -> None:
@@ -101,3 +102,11 @@ def test_source_provider_smoke_has_no_ports_mounts_or_browser_privileges() -> No
     assert smoke["depends_on"]["getcomics"]["condition"] == "service_healthy"
     assert smoke["depends_on"]["annas-archive"]["condition"] == "service_healthy"
     assert "ports" not in smoke
+    assert compose["networks"]["provider-test"]["internal"] is True
+
+
+def test_source_provider_smoke_never_probes_external_source_health() -> None:
+    smoke_script = SOURCE_SMOKE_SCRIPT.read_text(encoding="utf-8")
+
+    assert '"/v1/manifest"' in smoke_script
+    assert '"/v1/health"' not in smoke_script

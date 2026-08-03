@@ -64,4 +64,5 @@ services:
       - provider-test
 
 networks:
-  provider-test: {}
+  provider-test:
+    internal: true

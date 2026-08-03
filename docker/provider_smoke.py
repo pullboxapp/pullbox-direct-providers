@@ -43,11 +43,8 @@ def main() -> None:
     }
     for base_url, provider_id in expected.items():
         manifest = _get(base_url, "/v1/manifest", token)
-        health = _get(base_url, "/v1/health", token)
         if manifest.get("provider_id") != provider_id:
             raise RuntimeError("Provider identity did not match the expected image.")
-        if health.get("process_status") != "healthy":
-            raise RuntimeError("Provider process is not healthy.")
 
 
 if __name__ == "__main__":

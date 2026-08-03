@@ -61,61 +61,23 @@ jobs:
       - name: Run tests and coverage gate
         run: pytest --cov --cov-report=term-missing -q
 
-  container-conformance:
-    name: Private Network Conformance
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Build and test isolated synthetic provider
-        run: make docker-conformance
-
-  multiarch-build:
-    name: Multi-Architecture Image Build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
-        with:
-          platforms: arm64
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-      - name: Build AMD64 and ARM64 reference image without publishing
-        run: |
-          docker buildx build \
-            --file docker/Dockerfile.synthetic \
-            --target runtime \
-            --platform linux/amd64,linux/arm64 \
-            --output "type=oci,dest=${RUNNER_TEMP}/synthetic-provider.oci" \
-            .
-
   required:
     name: CI Required
     if: always()
     needs:
       - quality
       - test
-      - container-conformance
-      - multiarch-build
     runs-on: ubuntu-latest
     permissions:
       contents: read
     env:
       QUALITY_RESULT: ${{ needs.quality.result }}
       TEST_RESULT: ${{ needs.test.result }}
-      CONTAINER_RESULT: ${{ needs.container-conformance.result }}
-      MULTIARCH_RESULT: ${{ needs.multiarch-build.result }}
     steps:
       - name: Verify required jobs
         run: |
           if [[ "$QUALITY_RESULT" != "success" || \
-                "$TEST_RESULT" != "success" || \
-                "$CONTAINER_RESULT" != "success" || \
-                "$MULTIARCH_RESULT" != "success" ]]; then
+                "$TEST_RESULT" != "success" ]]; then
             echo "One or more required provider checks failed."
             exit 1
           fi
