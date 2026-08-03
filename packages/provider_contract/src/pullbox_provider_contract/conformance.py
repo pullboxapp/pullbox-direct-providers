@@ -146,24 +146,30 @@ async def _request_json(
     json_body: dict[str, Any] | None = None,
 ) -> object:
     try:
-        response = await client.request(method, path, headers=headers, json=json_body)
+        async with client.stream(method, path, headers=headers, json=json_body) as response:
+            content = bytearray()
+            async for chunk in response.aiter_bytes():
+                if len(content) + len(chunk) > _MAX_RESPONSE_BYTES:
+                    raise ConformanceError(
+                        "response_too_large", "Provider response exceeded the limit."
+                    )
+                content.extend(chunk)
+            status_code = response.status_code
     except httpx.HTTPError as exc:
         raise ConformanceError("provider_unavailable", "Provider request failed.") from exc
-    if len(response.content) > _MAX_RESPONSE_BYTES:
-        raise ConformanceError("response_too_large", "Provider response exceeded the limit.")
-    if response.status_code >= 400:
+    if status_code >= 400:
         code = "provider_request_failed"
         try:
-            payload = response.json()
+            payload = json.loads(content)
             if isinstance(payload, dict):
                 error = payload.get("error")
                 if isinstance(error, dict) and isinstance(error.get("code"), str):
                     code = error["code"]
         except (ValueError, json.JSONDecodeError):
             pass
-        raise ConformanceError(code, f"Provider returned HTTP {response.status_code}.")
+        raise ConformanceError(code, f"Provider returned HTTP {status_code}.")
     try:
-        return response.json()
+        return json.loads(content)
     except ValueError as exc:
         raise ConformanceError("malformed_response", "Provider returned malformed JSON.") from exc
 

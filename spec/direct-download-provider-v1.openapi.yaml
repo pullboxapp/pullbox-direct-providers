@@ -69,6 +69,8 @@ paths:
           $ref: "#/components/responses/IncompatibleProtocol"
         "422":
           description: Malformed request
+        "503":
+          $ref: "#/components/responses/SourceUnavailable"
   /v1/resolve:
     post:
       operationId: resolve
@@ -100,8 +102,12 @@ paths:
           $ref: "#/components/responses/DeadlineExceeded"
         "409":
           $ref: "#/components/responses/IncompatibleProtocol"
+        "429":
+          $ref: "#/components/responses/SourceQuotaLimited"
         "422":
           description: Malformed request
+        "503":
+          $ref: "#/components/responses/SourceUnavailable"
 components:
   securitySchemes:
     providerBearer:
@@ -122,6 +128,18 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
     IncompatibleProtocol:
       description: Requested protocol version is unsupported
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    SourceQuotaLimited:
+      description: Provider source quota is exhausted for this operation
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    SourceUnavailable:
+      description: Provider source or browser resolver is temporarily unavailable
       content:
         application/json:
           schema:

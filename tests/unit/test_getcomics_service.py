@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from pullbox_provider_contract.errors import ProtocolError
 from pullbox_provider_contract.models import SearchIntent
 from pullbox_provider_getcomics.service import GetComicsProviderService
 
@@ -143,6 +144,42 @@ async def test_collection_search_prioritizes_issue_title_and_keeps_later_exact_c
     assert any("The End Of All Songs" in candidate.display_title for candidate in candidates)
 
 
+async def test_collection_search_stops_after_result_limit_is_satisfied() -> None:
+    urls: list[str] = []
+
+    async def pages(url: str, **_kwargs: object) -> str:
+        urls.append(url)
+        if len(urls) > 1:
+            raise RuntimeError("redundant query must not run")
+        return """
+        <html><body>
+          <h1 class="search-title">Search Result</h1>
+          <article><h1 class="post-title">
+            <a href="https://getcomics.org/marvel/immortal-thor-vol-3/">
+              Immortal Thor Vol. 3 - The End Of All Songs (2025)
+            </a>
+          </h1></article>
+        </body></html>
+        """
+
+    service = GetComicsProviderService(page_fetcher=pages)
+    candidates = await service.search(
+        SearchIntent(
+            series_title="Immortal Thor",
+            normalized_title="immortal thor",
+            issue_number="3",
+            issue_type="volume",
+            volume="3",
+            issue_title="Vol. 3: The End of All Songs",
+            year=2025,
+        ),
+        limit=1,
+    )
+
+    assert len(candidates) == 1
+    assert len(urls) == 1
+
+
 async def test_collection_search_uses_explicit_volume_for_generic_issue_title() -> None:
     urls: list[str] = []
 
@@ -192,8 +229,11 @@ async def test_service_does_not_broaden_empty_standard_issue_search() -> None:
 async def test_service_rejects_forged_candidate_identifier() -> None:
     service = GetComicsProviderService(page_fetcher=_Pages())
 
-    with pytest.raises(RuntimeError, match="candidate"):
+    with pytest.raises(ProtocolError) as exc_info:
         await service.resolve("getcomics:not-valid-base64!")
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.code == "candidate_not_found"
 
 
 async def test_service_unwraps_all_opaque_artifact_host_buttons() -> None:

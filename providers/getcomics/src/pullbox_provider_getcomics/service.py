@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 from urllib.parse import urlencode
 
+from pullbox_provider_contract.errors import ProtocolError
 from pullbox_provider_contract.models import Artifact, Candidate, SearchIntent
 from pullbox_provider_contract.search_terms import (
     collection_title_fragment,
@@ -67,7 +68,9 @@ class GetComicsProviderService:
                     continue
                 seen_candidate_ids.add(candidate.provider_candidate_id)
                 candidates.append(candidate)
-        return candidates[:limit]
+                if len(candidates) >= limit:
+                    return candidates
+        return candidates
 
     async def resolve(
         self,
@@ -172,13 +175,17 @@ def _build_queries(intent: SearchIntent) -> list[str]:
 def _candidate_url(candidate_id: str) -> str:
     prefix = "getcomics:"
     if not candidate_id.startswith(prefix):
-        raise RuntimeError("GetComics candidate identifier is invalid.")
+        raise _candidate_not_found()
     encoded = candidate_id.removeprefix(prefix)
     try:
         padding = "=" * (-len(encoded) % 4)
         path = base64.urlsafe_b64decode(f"{encoded}{padding}").decode("utf-8")
     except (binascii.Error, UnicodeDecodeError) as exc:
-        raise RuntimeError("GetComics candidate identifier is invalid.") from exc
+        raise _candidate_not_found() from exc
     if not path.startswith("/") or "//" in path or "?" in path or "#" in path:
-        raise RuntimeError("GetComics candidate identifier is invalid.")
+        raise _candidate_not_found()
     return f"{_BASE_URL}{path}"
+
+
+def _candidate_not_found() -> ProtocolError:
+    return ProtocolError(404, "candidate_not_found", "Provider candidate was not found.")

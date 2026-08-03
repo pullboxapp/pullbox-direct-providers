@@ -9,6 +9,7 @@ from pullbox_provider_contract.models import Artifact, Candidate, ParsedCandidat
 from pullbox_provider_contract.resolver import ProviderResolverError
 from pullbox_provider_contract.source_http import BrowserChallengeRequiredError
 from pullbox_provider_getcomics.app import create_app
+from pullbox_provider_getcomics.service import GetComicsProviderService
 
 from tests.conftest import TEST_TOKEN, resolve_payload, search_payload
 
@@ -193,6 +194,29 @@ async def test_getcomics_preserves_browser_challenge_classification() -> None:
         "message": "GetComics browser resolver attempt failed.",
     }
     assert "secret resolver detail" not in resolver_failure.text
+
+
+async def test_getcomics_rejects_invalid_candidate_as_permanent_not_found() -> None:
+    async def unexpected_fetch(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("invalid candidate must be rejected before source access")
+
+    app = create_app(
+        bearer_token=TEST_TOKEN,
+        service=GetComicsProviderService(page_fetcher=unexpected_fetch),
+    )
+
+    response = await _request(
+        app,
+        "POST",
+        "/v1/resolve",
+        json=resolve_payload(provider_candidate_id="getcomics:not-valid-base64!"),
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"] == {
+        "code": "candidate_not_found",
+        "message": "Provider candidate was not found.",
+    }
 
 
 def _candidate(number: int) -> Candidate:
