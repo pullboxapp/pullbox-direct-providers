@@ -94,19 +94,17 @@ def _reviewed_findings(baseline: dict[str, Any], image: str) -> set[Finding]:
     return findings
 
 
-def _omittable_rule_ids(
+def _actionable_rule_ids(
     report: dict[str, Any],
     baseline: dict[str, Any],
     image: str,
 ) -> set[str]:
     actual = _report_findings(report)
     reviewed = _reviewed_findings(baseline, image)
-    exact_reviewed = {finding.rule_id for finding in actual & reviewed}
-    unreviewed = {finding.rule_id for finding in actual - reviewed}
-    return exact_reviewed - unreviewed
+    return {finding.rule_id for finding in actual - reviewed}
 
 
-def filter_sarif(sarif: dict[str, Any], reviewed_rule_ids: set[str]) -> tuple[int, int]:
+def filter_sarif(sarif: dict[str, Any], actionable_rule_ids: set[str]) -> tuple[int, int]:
     runs = sarif.get("runs")
     if not isinstance(runs, list):
         raise ValueError("SARIF document is missing its runs list")
@@ -126,10 +124,10 @@ def filter_sarif(sarif: dict[str, Any], reviewed_rule_ids: set[str]) -> tuple[in
             rule_id = result.get("ruleId")
             if not isinstance(rule_id, str) or not rule_id:
                 raise ValueError("SARIF result is missing ruleId")
-            if rule_id in reviewed_rule_ids:
-                removed += 1
-            else:
+            if rule_id in actionable_rule_ids:
                 filtered_results.append(result)
+            else:
+                removed += 1
         run["results"] = filtered_results
         remaining += len(filtered_results)
     return removed, remaining
@@ -149,7 +147,7 @@ def main() -> int:
         baseline = _read_object(args.baseline)
         removed, remaining = filter_sarif(
             sarif,
-            _omittable_rule_ids(report, baseline, args.image),
+            _actionable_rule_ids(report, baseline, args.image),
         )
         args.output.write_text(json.dumps(sarif, indent=2) + "\n", encoding="utf-8")
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
@@ -157,7 +155,7 @@ def main() -> int:
         return 1
     print(
         f"Actionable SARIF for {args.image}: {remaining} unreviewed finding(s); "
-        f"{removed} reviewed finding(s) omitted."
+        f"{removed} reviewed or nonblocking finding(s) omitted."
     )
     return 0
 
