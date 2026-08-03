@@ -7,10 +7,20 @@ import pytest
 
 ROOT = Path(__file__).parents[2]
 SCRIPT = ROOT / ".github" / "scripts" / "resolve-provider-release.py"
+LATEST_SCRIPT = ROOT / ".github" / "scripts" / "select-latest-provider-release.py"
 
 
 def _load_module():
     spec = importlib.util.spec_from_file_location("resolve_provider_release", SCRIPT)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_latest_module():
+    spec = importlib.util.spec_from_file_location("select_latest_provider_release", LATEST_SCRIPT)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -121,3 +131,31 @@ def test_release_tag_must_match_the_selected_provider_package_version(tmp_path: 
             tag="getcomics-v1.0.0",
             repository_root=tmp_path,
         )
+
+
+def test_latest_release_selection_uses_highest_published_stable_version() -> None:
+    releases = [
+        {"tagName": "getcomics-v1.2.0", "isDraft": False, "isPrerelease": False},
+        {"tagName": "getcomics-v1.10.0", "isDraft": False, "isPrerelease": False},
+        {"tagName": "getcomics-v2.0.0rc1", "isDraft": False, "isPrerelease": True},
+        {"tagName": "getcomics-v3.0.0", "isDraft": True, "isPrerelease": False},
+        {"tagName": "annas-archive-v9.0.0", "isDraft": False, "isPrerelease": False},
+    ]
+
+    selected = _load_latest_module().select_latest_release(releases, provider="getcomics")
+
+    assert selected == ("getcomics-v1.10.0", "1.10.0")
+
+
+def test_latest_release_selection_returns_none_without_a_stable_release() -> None:
+    releases = [
+        {"tagName": "annas-archive-v1.0.0rc1", "isDraft": False, "isPrerelease": True},
+        {"tagName": "annas-archive-v1.0.0", "isDraft": True, "isPrerelease": False},
+    ]
+
+    selected = _load_latest_module().select_latest_release(
+        releases,
+        provider="annas-archive",
+    )
+
+    assert selected is None

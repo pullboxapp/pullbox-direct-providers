@@ -97,15 +97,17 @@ The `Provider Image Release` workflow then:
    and confirms both registries expose the same digest, both runnable platforms,
    OCI descriptions, SBOM, and provenance.
 6. Signs and verifies both candidate registry digests with Cosign.
-7. Promotes the verified digest to runnable version, SHA, manual `edge`, and
-   eligible stable `latest` tags, then verifies every tag resolves to the signed
-   digest.
+7. Promotes the verified digest to runnable version, SHA, and manual `edge`
+   tags, then verifies every tag resolves to the signed digest.
 8. Uploads trusted release metadata for the downstream `Release` workflow.
 
 The downstream workflow revalidates tag ownership and both signatures before
-creating the provider-specific GitHub Release. Manual dispatches publish an
-`edge` image for release rehearsal but never create a GitHub Release or move
-`latest`.
+creating the provider-specific GitHub Release. It then selects the highest
+published stable release for that provider, reverifies its signatures, and
+reconciles both registries' `latest` tags to that exact digest. This is
+idempotent and cannot move `latest` backward when provider releases complete
+out of order. Manual dispatches publish an `edge` image for release rehearsal
+but never create a GitHub Release or move `latest`.
 
 ## Post-Release Verification
 
@@ -126,12 +128,14 @@ Do not describe an image as signed or released until all of these checks pass.
 
 ## Failure And Rollback
 
-A failure before signed-digest promotion leaves no runnable version, SHA, or
-`latest` tag. The internal `candidate-*` reference may remain for diagnosis but
-is not a supported user pull target. A failure after signed promotion but before
-GitHub Release creation leaves a signed, verified image without its release
-page; investigate and rerun the downstream release workflow without moving or
-recreating the immutable numbered tag.
+A failure before signed-digest promotion leaves no runnable version or SHA tag.
+The internal `candidate-*` reference may remain for diagnosis but is not a
+supported user pull target. A failure after signed promotion but before GitHub
+Release creation leaves a signed, verified image without its release page;
+investigate and rerun the downstream release workflow without moving or
+recreating the immutable numbered tag. A failure while reconciling `latest`
+does not invalidate the numbered release; rerun the downstream workflow so it
+reselects the highest published stable release and repairs `latest`.
 
 Provider rollback is independent from Pullbox. Pin the prior numbered provider
 tag or digest, recreate only that provider container, verify health and protocol

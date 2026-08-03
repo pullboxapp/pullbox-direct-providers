@@ -15,6 +15,7 @@ CONTAINER_WORKFLOW = WORKFLOW_DIR / "container-security.yml"
 PROVIDER_RELEASE_WORKFLOW = WORKFLOW_DIR / "provider-release.yml"
 GITHUB_RELEASE_WORKFLOW = WORKFLOW_DIR / "release.yml"
 RELEASE_RESOLVER = ROOT / ".github" / "scripts" / "resolve-provider-release.py"
+LATEST_RELEASE_SELECTOR = ROOT / ".github" / "scripts" / "select-latest-provider-release.py"
 DEPENDABOT_CONFIG = ROOT / ".github" / "dependabot.yml"
 CODEQL_CONFIG = ROOT / ".github" / "codeql" / "codeql-config.yml"
 PINNED_ACTION = re.compile(r"uses:\s+[^@\s]+@[0-9a-f]{40}\s+#\s+v\S+")
@@ -184,12 +185,7 @@ def test_provider_release_is_tag_or_manual_only() -> None:
     }
     assert "tag_override" not in triggers["workflow_dispatch"]["inputs"]
     assert workflow["permissions"] == {"contents": "read"}
-    assert workflow["concurrency"]["cancel-in-progress"] is False
-    concurrency_group = workflow["concurrency"]["group"]
-    assert "github.ref || github.run_id" not in concurrency_group
-    assert "github.event.inputs.provider" in concurrency_group
-    for provider in ("getcomics", "annas-archive", "synthetic"):
-        assert provider in concurrency_group
+    assert "concurrency" not in workflow
     assert "pull_request" not in triggers
     assert "pull_request_target" not in text
 
@@ -258,6 +254,7 @@ def test_provider_release_validates_before_tagging_and_preserves_supply_chain_da
     assert "image-tags" not in sign_text
     assert "image-tags" in promote_text
     assert jobs["promote"]["needs"] == ["prepare", "publish", "sign"]
+    assert "type=raw,value=latest" not in text
 
 
 def test_provider_release_signs_and_verifies_both_registry_digests() -> None:
@@ -286,13 +283,20 @@ def test_github_release_requires_a_successful_tagged_provider_release() -> None:
             "types": ["completed"],
         }
     }
-    assert workflow["concurrency"]["cancel-in-progress"] is False
+    assert "concurrency" not in workflow
     assert jobs["create-release"]["if"] == (
         "github.event.workflow_run.conclusion == 'success' && "
         "github.event.workflow_run.event == 'push'"
     )
     assert "softprops/action-gh-release" not in text
     assert "gh release create" in text
+    assert "gh release view" in text
     assert "actions/download-artifact@" in text
     assert "provider-release-metadata" in text
     assert "cosign verify" in text
+    assert "(a|b|rc)[0-9]+$" in text
+    assert "gh release list" in text
+    assert "select-latest-provider-release.py" in text
+    assert "Promote highest stable release to latest" in text
+    assert "docker buildx imagetools create" in text
+    assert LATEST_RELEASE_SELECTOR.exists()
