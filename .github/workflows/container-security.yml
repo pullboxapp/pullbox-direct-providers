@@ -90,13 +90,26 @@ jobs:
         with:
           image: ${{ env.IMAGE }}
           fail-build: false
-          severity-cutoff: negligible
+          severity-cutoff: high
           output-format: sarif
-      - name: Upload SARIF to GitHub Security
-        if: always() && steps.scan-sarif.outcome == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      - name: Filter reviewed findings from SARIF
+        id: filter-sarif
+        if: always() && steps.scan-sarif.outcome == 'success'
+        env:
+          GRYPE_REPORT: ${{ steps.scan-json.outputs.json }}
+          GRYPE_SARIF: ${{ steps.scan-sarif.outputs.sarif }}
+        run: |
+          python .github/scripts/filter-reviewed-container-sarif.py \
+            --sarif "$GRYPE_SARIF" \
+            --report "$GRYPE_REPORT" \
+            --baseline .github/security/container-vulnerability-baseline.json \
+            --image "${{ matrix.provider }}" \
+            --output "${RUNNER_TEMP}/${{ matrix.provider }}-actionable.sarif"
+      - name: Upload actionable SARIF
+        if: always() && steps.filter-sarif.outcome == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
         uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
         with:
-          sarif_file: ${{ steps.scan-sarif.outputs.sarif }}
+          sarif_file: ${{ runner.temp }}/${{ matrix.provider }}-actionable.sarif
           category: container-${{ matrix.provider }}
       - name: Upload Grype JSON report
         if: always()

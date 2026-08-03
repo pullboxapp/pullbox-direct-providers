@@ -39,6 +39,7 @@ pull request workflows do not publish images or receive registry credentials.
 The pinned Python base image currently has reviewed upstream findings that are
 tracked in `.github/security/container-vulnerability-baseline.json`. The
 baseline is not a suppression of scanner output: new High or Critical findings
-fail CI, full reports remain available, and every accepted entry requires a
-rationale and expiry date. Base image and dependency updates should remove
-entries as fixes become available.
+fail CI, full reports remain available as CI artifacts, and every accepted
+entry requires a rationale and expiry date. Only unreviewed High or Critical
+findings are uploaded to the actionable GitHub code-scanning dashboard. Base
+image and dependency updates should remove entries as fixes become available.

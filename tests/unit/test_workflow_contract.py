@@ -132,12 +132,22 @@ def test_container_security_builds_tests_and_scans_every_runtime_image() -> None
     assert "make docker-source-smoke" in text
     assert "anchore/scan-action@" in text
     assert "verify-container-vulnerability-baseline.py" in text
+    assert "filter-reviewed-container-sarif.py" in text
+    assert '--report "$GRYPE_REPORT"' in text
     assert "linux/amd64,linux/arm64" in text
     assert "PYTHON_BASE" not in text
     assert "if: always()" in text
     assert "if-no-files-found: ignore" in text
     assert "push: true" not in text
     assert "push=true" not in text
+
+    steps = jobs["image-scan"]["steps"]
+    json_scan = next(step for step in steps if step.get("id") == "scan-json")
+    sarif_scan = next(step for step in steps if step.get("id") == "scan-sarif")
+    sarif_upload = next(step for step in steps if step.get("name") == "Upload actionable SARIF")
+    assert json_scan["with"]["severity-cutoff"] == "negligible"
+    assert sarif_scan["with"]["severity-cutoff"] == "high"
+    assert sarif_upload["with"]["sarif_file"].endswith("-actionable.sarif")
 
 
 def test_dependabot_covers_python_actions_and_each_dockerfile() -> None:
