@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime
+from importlib.metadata import version
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Request
@@ -27,6 +28,7 @@ from pullbox_provider_synthetic.service import SyntheticProviderService
 
 _SECURITY = HTTPBearer(auto_error=False)
 _MIN_BEARER_TOKEN_LENGTH = 32
+_VERSION = version("pullbox-direct-providers")
 
 
 def _error_response(code: str, message: str, status_code: int) -> JSONResponse:
@@ -71,7 +73,7 @@ def create_app(
         raise ValueError("PULLBOX_PROVIDER_TOKEN must contain at least 32 characters")
     provider_service = service or SyntheticProviderService()
     authenticate = _BearerAuthenticator(expected_token)
-    app = FastAPI(title="Pullbox Synthetic Direct Provider", version="0.1.0.dev0")
+    app = FastAPI(title="Pullbox Synthetic Direct Provider", version=_VERSION)
 
     @app.exception_handler(ProtocolError)
     async def handle_protocol_error(_request: Request, exc: ProtocolError) -> JSONResponse:
@@ -87,7 +89,7 @@ def create_app(
             provider_id="pullbox.synthetic",
             display_name="Pullbox Synthetic Provider",
             description="Deterministic reference provider for protocol conformance.",
-            provider_version="0.1.0.dev0",
+            provider_version=_VERSION,
             supported_protocol_versions=[PROTOCOL_VERSION],
             publisher="Pullbox",
             license="GPL-3.0-or-later",
