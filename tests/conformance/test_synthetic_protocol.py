@@ -61,6 +61,7 @@ async def test_manifest_exposes_stable_identity_and_capability_contract(
     payload = response.json()
     assert payload["protocol_version"] == "direct-download-provider/v1"
     assert payload["provider_id"] == "pullbox.synthetic"
+    assert payload["provider_version"] == "1.0.0"
     assert payload["supported_protocol_versions"] == ["direct-download-provider/v1"]
     assert payload["source_domains"] == ["provider.test"]
     assert payload["capabilities"]["search"] is True

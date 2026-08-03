@@ -5,12 +5,11 @@ Optional, separately deployed direct-download discovery providers for
 
 ## Status
 
-This repository is being prepared for Pullbox v1.1.0. The version-one protocol,
-Python DTO package, compatibility policy, conformance runner, and synthetic
-reference provider are frozen. The GetComics and Anna's Archive source
-implementations are complete and validated in hardened, private-network test
-containers. Publishing and signing their production images remains a DD-8
-release gate, so operators should not treat source checkouts as released images.
+This repository provides the version-one Pullbox direct-download protocol,
+Python DTO package, compatibility policy, conformance runner, synthetic
+reference provider, and the official GetComics and Anna's Archive providers.
+Production images are independently versioned, multi-architecture, scanned,
+signed, and published to GHCR and Docker Hub.
 
 ## Source Providers
 
@@ -93,10 +92,12 @@ artifacts. Trusted runs upload only unreviewed High or Critical findings to
 GitHub Security, so the code-scanning dashboard stays actionable while the
 expiring baseline remains the audit trail for accepted upstream risk.
 
-Tags matching `synthetic-v*` can publish a signed, multi-arch reference image
-to GHCR with SBOM and provenance attestations. That image is a protocol test
-tool, not a comic discovery source and not a production provider. Publishing
-the GetComics and Anna's Archive images remains a DD-8 release gate.
+Provider-prefixed semantic-version tags publish one signed provider image to
+both registries. The pipeline validates the candidate before creating runnable
+tags, publishes identical Linux AMD64/ARM64 manifests, retains SBOM and
+provenance attestations, signs both registry digests with keyless Cosign, and
+creates a provider-specific GitHub Release only after verification succeeds.
+The synthetic image remains a protocol test tool, not a comic discovery source.
 
 The local Docker harness intentionally publishes no host port. The provider
 runs as UID/GID `65532:65532` with a read-only root filesystem, a bounded
@@ -178,6 +179,36 @@ mounts the Docker socket. Image deployment, network isolation, updates, and
 rollback remain operator responsibilities. Disabling or removing a registration
 stops future use without granting the provider access to Pullbox paths, its
 database, download-client credentials, or artifact-host credentials.
+
+## Production Images
+
+Official images are available from either registry. Use the same version for
+either registry; both names resolve to the same signed digest.
+
+| Provider | GHCR | Docker Hub |
+| --- | --- | --- |
+| GetComics | `ghcr.io/pullboxapp/pullbox-provider-getcomics:1.0.0` | `docker.io/pullbox/pullbox-provider-getcomics:1.0.0` |
+| Anna's Archive | `ghcr.io/pullboxapp/pullbox-provider-annas-archive:1.0.0` | `docker.io/pullbox/pullbox-provider-annas-archive:1.0.0` |
+
+Pin a numbered version or the immutable digest in production. `latest` tracks
+only the newest stable provider release; prerelease and manual `edge` builds do
+not move it. Each provider has an independent lifecycle, so their version
+numbers may diverge after the initial release.
+
+Generate a different bearer token for each provider and keep the services on a
+private Docker network with Pullbox:
+
+```bash
+openssl rand -hex 32
+```
+
+The containers require only `PULLBOX_PROVIDER_TOKEN`, expose port `8780` to the
+private network, run as UID/GID `65532:65532`, and need no host volumes. Keep a
+read-only root filesystem, drop all capabilities, enable `no-new-privileges`,
+and provide only a bounded `/tmp` tmpfs, as shown in the Pullbox deployment
+documentation.
+
+Release maintainers should follow [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ## Security
 

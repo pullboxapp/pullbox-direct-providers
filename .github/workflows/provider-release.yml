@@ -1,0 +1,714 @@
+---
+# Publishes one independently versioned provider image to GHCR and Docker Hub.
+# Platform blobs and an internal candidate index are published first; runnable
+# tags are created only after validation, signing, and signature verification.
+
+name: Provider Image Release
+
+on:
+  push:
+    tags:
+      - "getcomics-v*"
+      - "annas-archive-v*"
+      - "synthetic-v*"
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: "Provider image to build"
+        required: true
+        type: choice
+        options:
+          - getcomics
+          - annas-archive
+          - synthetic
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare Provider Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      provider: ${{ steps.release.outputs.provider }}
+      dockerfile: ${{ steps.release.outputs.dockerfile }}
+      image-name: ${{ steps.release.outputs.image-name }}
+      title: ${{ steps.release.outputs.title }}
+      description: ${{ steps.release.outputs.description }}
+      ghcr-image: ${{ steps.release.outputs.ghcr-image }}
+      dockerhub-image: ${{ steps.release.outputs.dockerhub-image }}
+      version: ${{ steps.release.outputs.version }}
+      release-tag: ${{ steps.release.outputs.release-tag }}
+      is-release: ${{ steps.release.outputs.is-release }}
+      is-prerelease: ${{ steps.release.outputs.is-prerelease }}
+      image-tags: ${{ steps.meta.outputs.tags }}
+      image-labels: ${{ steps.meta.outputs.labels }}
+      image-annotations: ${{ steps.meta.outputs.annotations }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Verify tagged commit is merged to main
+        if: github.ref_type == 'tag'
+        run: |
+          git fetch origin main --no-tags
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "::error::Provider release tags must point to commits already merged into main."
+            exit 1
+          fi
+
+      - name: Resolve and validate provider release metadata
+        id: release
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          MANUAL_PROVIDER: ${{ inputs.provider || '' }}
+        run: |
+          python .github/scripts/resolve-provider-release.py \
+            --repository-owner "${{ github.repository_owner }}" \
+            --tag "${RELEASE_TAG}" \
+            --provider "${MANUAL_PROVIDER}" \
+            --version edge \
+            --github-output "${GITHUB_OUTPUT}"
+
+      - name: Generate OCI image metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+        with:
+          images: |
+            ${{ steps.release.outputs.ghcr-image }}
+            ${{ steps.release.outputs.dockerhub-image }}
+          tags: |
+            type=raw,value=${{ steps.release.outputs.version }}
+            type=sha,format=short,prefix=sha-,enable=${{ steps.release.outputs.is-release == 'true' }}
+          labels: |
+            org.opencontainers.image.title=${{ steps.release.outputs.title }}
+            org.opencontainers.image.description=${{ steps.release.outputs.description }}
+            org.opencontainers.image.url=https://github.com/${{ github.repository }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=GPL-3.0-or-later
+            org.opencontainers.image.version=${{ steps.release.outputs.version }}
+          annotations: |
+            org.opencontainers.image.title=${{ steps.release.outputs.title }}
+            org.opencontainers.image.description=${{ steps.release.outputs.description }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.licenses=GPL-3.0-or-later
+            org.opencontainers.image.version=${{ steps.release.outputs.version }}
+
+  build-amd64:
+    name: Build AMD64 Provider Image
+    runs-on: ubuntu-latest
+    needs: [prepare]
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Validate Docker Hub credentials
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "${DOCKERHUB_USERNAME}" ] || [ -z "${DOCKERHUB_TOKEN}" ]; then
+            echo "::error::DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are required."
+            exit 1
+          fi
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push AMD64 by digest
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ${{ needs.prepare.outputs.dockerfile }}
+          target: runtime
+          platforms: linux/amd64
+          outputs: >-
+            type=image,"name=${{ needs.prepare.outputs.ghcr-image }},${{ needs.prepare.outputs.dockerhub-image }}",push-by-digest=true,name-canonical=true,push=true
+          labels: ${{ needs.prepare.outputs.image-labels }}
+          annotations: ${{ needs.prepare.outputs.image-annotations }}
+          cache-from: type=gha,scope=${{ needs.prepare.outputs.provider }}-release-amd64-v1
+          cache-to: type=gha,mode=max,scope=${{ needs.prepare.outputs.provider }}-release-amd64-v1
+          provenance: mode=max
+          sbom: true
+
+      - name: Verify AMD64 digest in both registries
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          GHCR_IMAGE: ${{ needs.prepare.outputs.ghcr-image }}
+          DOCKERHUB_IMAGE: ${{ needs.prepare.outputs.dockerhub-image }}
+        run: |
+          if ! [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Unexpected AMD64 digest: ${DIGEST}"
+            exit 1
+          fi
+          docker buildx imagetools inspect "${GHCR_IMAGE}@${DIGEST}" > /dev/null
+          docker buildx imagetools inspect "${DOCKERHUB_IMAGE}@${DIGEST}" > /dev/null
+          mkdir -p "${RUNNER_TEMP}/digests"
+          touch "${RUNNER_TEMP}/digests/${DIGEST#sha256:}"
+
+      - name: Upload AMD64 digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provider-release-digest-amd64
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  build-arm64:
+    name: Build ARM64 Provider Image
+    runs-on: ubuntu-latest
+    needs: [prepare]
+    timeout-minutes: 50
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Validate Docker Hub credentials
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "${DOCKERHUB_USERNAME}" ] || [ -z "${DOCKERHUB_TOKEN}" ]; then
+            echo "::error::DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are required."
+            exit 1
+          fi
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push ARM64 by digest
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ${{ needs.prepare.outputs.dockerfile }}
+          target: runtime
+          platforms: linux/arm64
+          outputs: >-
+            type=image,"name=${{ needs.prepare.outputs.ghcr-image }},${{ needs.prepare.outputs.dockerhub-image }}",push-by-digest=true,name-canonical=true,push=true
+          labels: ${{ needs.prepare.outputs.image-labels }}
+          annotations: ${{ needs.prepare.outputs.image-annotations }}
+          cache-from: type=gha,scope=${{ needs.prepare.outputs.provider }}-release-arm64-v1
+          cache-to: type=gha,mode=max,scope=${{ needs.prepare.outputs.provider }}-release-arm64-v1
+          provenance: mode=max
+          sbom: true
+
+      - name: Verify ARM64 digest in both registries
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          GHCR_IMAGE: ${{ needs.prepare.outputs.ghcr-image }}
+          DOCKERHUB_IMAGE: ${{ needs.prepare.outputs.dockerhub-image }}
+        run: |
+          if ! [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Unexpected ARM64 digest: ${DIGEST}"
+            exit 1
+          fi
+          docker buildx imagetools inspect "${GHCR_IMAGE}@${DIGEST}" > /dev/null
+          docker buildx imagetools inspect "${DOCKERHUB_IMAGE}@${DIGEST}" > /dev/null
+          mkdir -p "${RUNNER_TEMP}/digests"
+          touch "${RUNNER_TEMP}/digests/${DIGEST#sha256:}"
+
+      - name: Upload ARM64 digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provider-release-digest-arm64
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  validate-amd64:
+    name: Validate AMD64 Candidate
+    runs-on: ubuntu-latest
+    needs: [prepare, build-amd64]
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: read
+    env:
+      CANDIDATE_IMAGE: ${{ needs.prepare.outputs.ghcr-image }}@${{ needs.build-amd64.outputs.digest }}
+      LOCAL_IMAGE: pullbox-provider-release:${{ github.run_id }}
+      SMOKE_CONTAINER: pullbox-provider-release-smoke-${{ github.run_id }}
+      PROVIDER_TOKEN: release-smoke-token-with-at-least-thirty-two-characters
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull immutable candidate
+        run: |
+          docker pull "${CANDIDATE_IMAGE}"
+          docker tag "${CANDIDATE_IMAGE}" "${LOCAL_IMAGE}"
+
+      - name: Produce release Grype report
+        id: scan
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          image: ${{ env.LOCAL_IMAGE }}
+          fail-build: false
+          severity-cutoff: negligible
+          output-format: json
+
+      - name: Reject unreviewed High or Critical findings
+        env:
+          GRYPE_REPORT: ${{ steps.scan.outputs.json }}
+          PROVIDER: ${{ needs.prepare.outputs.provider }}
+        run: |
+          python .github/scripts/verify-container-vulnerability-baseline.py \
+            --report "${GRYPE_REPORT}" \
+            --baseline .github/security/container-vulnerability-baseline.json \
+            --image "${PROVIDER}"
+
+      - name: Upload release Grype report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provider-release-grype-${{ needs.prepare.outputs.provider }}
+          path: ${{ steps.scan.outputs.json }}
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Start hardened candidate
+        run: |
+          docker run -d \
+            --name "${SMOKE_CONTAINER}" \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            -p 127.0.0.1::8780 \
+            -e PULLBOX_PROVIDER_TOKEN="${PROVIDER_TOKEN}" \
+            -e PULLBOX_PROVIDER_REVISION="${GITHUB_SHA}" \
+            "${LOCAL_IMAGE}"
+          smoke_port=$(docker port "${SMOKE_CONTAINER}" 8780/tcp | awk -F: 'NR == 1 { print $NF }')
+          if [ -z "${smoke_port}" ]; then
+            echo "::error::Unable to resolve provider smoke-test port."
+            exit 1
+          fi
+          echo "PROVIDER_SMOKE_URL=http://127.0.0.1:${smoke_port}" >> "${GITHUB_ENV}"
+
+      - name: Verify authenticated provider API
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent \
+              --max-time 5 \
+              -H "Authorization: Bearer ${PROVIDER_TOKEN}" \
+              "${PROVIDER_SMOKE_URL}/v1/manifest" \
+              -o "${RUNNER_TEMP}/manifest.json"; then
+              break
+            fi
+            if [ "${attempt}" -eq 30 ]; then
+              echo "::error::Provider candidate did not become ready."
+              docker logs "${SMOKE_CONTAINER}"
+              exit 1
+            fi
+            sleep 1
+          done
+
+          curl --fail --silent \
+            --max-time 30 \
+            -H "Authorization: Bearer ${PROVIDER_TOKEN}" \
+            "${PROVIDER_SMOKE_URL}/v1/health" \
+            -o "${RUNNER_TEMP}/health.json"
+
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          runner_temp = Path(os.environ["RUNNER_TEMP"])
+          manifest = json.loads((runner_temp / "manifest.json").read_text())
+          health = json.loads((runner_temp / "health.json").read_text())
+          if "direct-download-provider/v1" not in manifest.get(
+              "supported_protocol_versions", []
+          ):
+              raise SystemExit("Provider candidate does not advertise protocol v1")
+          if health.get("process_status") != "healthy":
+              raise SystemExit("Provider candidate process is not healthy")
+          PY
+
+      - name: Verify unauthenticated requests are rejected
+        run: |
+          status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --max-time 5 \
+            "${PROVIDER_SMOKE_URL}/v1/manifest")
+          if [ "${status}" != "401" ]; then
+            echo "::error::Expected unauthenticated manifest request to return 401, got ${status}."
+            exit 1
+          fi
+
+      - name: Show candidate logs on failure
+        if: failure() || cancelled()
+        run: docker logs "${SMOKE_CONTAINER}" || true
+
+      - name: Clean up candidate
+        if: always()
+        run: |
+          docker rm -f "${SMOKE_CONTAINER}" || true
+          docker image rm "${LOCAL_IMAGE}" || true
+
+  publish:
+    name: Publish Candidate Provider Image
+    runs-on: ubuntu-latest
+    needs: [prepare, build-amd64, build-arm64, validate-amd64]
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image-digest: ${{ steps.inspect.outputs.digest }}
+    steps:
+      - name: Download platform digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: provider-release-digest-*
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Publish GHCR multi-platform manifest
+        env:
+          IMAGE: ${{ needs.prepare.outputs.ghcr-image }}
+          CANDIDATE_TAG: candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          DESCRIPTION: ${{ needs.prepare.outputs.description }}
+          TITLE: ${{ needs.prepare.outputs.title }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          sources=()
+          for digest_file in *; do
+            sources+=("${IMAGE}@sha256:${digest_file}")
+          done
+          if [ "${#sources[@]}" -ne 2 ]; then
+            echo "::error::Expected two platform digests, found ${#sources[@]}."
+            exit 1
+          fi
+
+          docker buildx imagetools create \
+            --annotation "index:org.opencontainers.image.title=${TITLE}" \
+            --annotation "index:org.opencontainers.image.description=${DESCRIPTION}" \
+            --annotation "index:org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+            --annotation "index:org.opencontainers.image.licenses=GPL-3.0-or-later" \
+            --annotation "index:org.opencontainers.image.version=${VERSION}" \
+            --tag "${IMAGE}:${CANDIDATE_TAG}" \
+            "${sources[@]}"
+
+      - name: Publish Docker Hub multi-platform manifest
+        env:
+          IMAGE: ${{ needs.prepare.outputs.dockerhub-image }}
+          CANDIDATE_TAG: candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          DESCRIPTION: ${{ needs.prepare.outputs.description }}
+          TITLE: ${{ needs.prepare.outputs.title }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          sources=()
+          for digest_file in *; do
+            sources+=("${IMAGE}@sha256:${digest_file}")
+          done
+
+          docker buildx imagetools create \
+            --annotation "index:org.opencontainers.image.title=${TITLE}" \
+            --annotation "index:org.opencontainers.image.description=${DESCRIPTION}" \
+            --annotation "index:org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+            --annotation "index:org.opencontainers.image.licenses=GPL-3.0-or-later" \
+            --annotation "index:org.opencontainers.image.version=${VERSION}" \
+            --tag "${IMAGE}:${CANDIDATE_TAG}" \
+            "${sources[@]}"
+
+      - name: Verify both registries expose the same immutable digest
+        id: inspect
+        env:
+          GHCR_IMAGE: ${{ needs.prepare.outputs.ghcr-image }}
+          DOCKERHUB_IMAGE: ${{ needs.prepare.outputs.dockerhub-image }}
+          CANDIDATE_TAG: candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          DESCRIPTION: ${{ needs.prepare.outputs.description }}
+        run: |
+          docker buildx imagetools inspect "${GHCR_IMAGE}:${CANDIDATE_TAG}" --raw > ghcr-index.json
+          docker buildx imagetools inspect "${DOCKERHUB_IMAGE}:${CANDIDATE_TAG}" --raw > dockerhub-index.json
+          GHCR_DIGEST=$(docker buildx imagetools inspect "${GHCR_IMAGE}:${CANDIDATE_TAG}" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          DOCKERHUB_DIGEST=$(docker buildx imagetools inspect "${DOCKERHUB_IMAGE}:${CANDIDATE_TAG}" --format '{{json .Manifest.Digest}}' | tr -d '"')
+
+          if ! [[ "${GHCR_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Unexpected GHCR digest: ${GHCR_DIGEST}"
+            exit 1
+          fi
+          if [ "${GHCR_DIGEST}" != "${DOCKERHUB_DIGEST}" ]; then
+            echo "::error::Registry digests differ: GHCR=${GHCR_DIGEST} DockerHub=${DOCKERHUB_DIGEST}"
+            exit 1
+          fi
+          echo "digest=${GHCR_DIGEST}" >> "${GITHUB_OUTPUT}"
+
+          python - <<'PY'
+          import json
+          import os
+
+          expected_platforms = {"linux/amd64", "linux/arm64"}
+          expected_description = os.environ["DESCRIPTION"]
+          for registry, path in (
+              ("GHCR", "ghcr-index.json"),
+              ("Docker Hub", "dockerhub-index.json"),
+          ):
+              with open(path, encoding="utf-8") as handle:
+                  index = json.load(handle)
+              annotations = index.get("annotations") or {}
+              if annotations.get("org.opencontainers.image.description") != expected_description:
+                  raise SystemExit(f"{registry} is missing its OCI index description")
+              manifests = index.get("manifests") or []
+              platforms = {
+                  f"{platform.get('os')}/{platform.get('architecture')}"
+                  for manifest in manifests
+                  if (platform := manifest.get("platform"))
+              }
+              missing = expected_platforms - platforms
+              if missing:
+                  raise SystemExit(f"{registry} is missing platforms: {sorted(missing)}")
+              if not any(
+                  (manifest.get("annotations") or {}).get("vnd.docker.reference.type")
+                  == "attestation-manifest"
+                  for manifest in manifests
+              ):
+                  raise SystemExit(f"{registry} is missing SBOM/provenance attestations")
+          PY
+
+  sign:
+    name: Sign and Verify Provider Image
+    runs-on: ubuntu-latest
+    needs: [prepare, publish]
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign both registry digests
+        env:
+          DIGEST: ${{ needs.publish.outputs.image-digest }}
+          GHCR_IMAGE: ${{ needs.prepare.outputs.ghcr-image }}
+          DOCKERHUB_IMAGE: ${{ needs.prepare.outputs.dockerhub-image }}
+        run: |
+          if ! [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Unexpected multi-platform digest: ${DIGEST}"
+            exit 1
+          fi
+          cosign sign --yes "${GHCR_IMAGE}@${DIGEST}"
+          cosign sign --yes "${DOCKERHUB_IMAGE}@${DIGEST}"
+
+      - name: Verify both registry signatures
+        env:
+          DIGEST: ${{ needs.publish.outputs.image-digest }}
+          GHCR_IMAGE: ${{ needs.prepare.outputs.ghcr-image }}
+          DOCKERHUB_IMAGE: ${{ needs.prepare.outputs.dockerhub-image }}
+          CERTIFICATE_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/provider-release.yml@${{ github.ref }}
+        run: |
+          cosign verify \
+            --certificate-identity "${CERTIFICATE_IDENTITY}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${GHCR_IMAGE}@${DIGEST}"
+          cosign verify \
+            --certificate-identity "${CERTIFICATE_IDENTITY}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${DOCKERHUB_IMAGE}@${DIGEST}"
+
+  promote:
+    name: Promote Signed Provider Image
+    runs-on: ubuntu-latest
+    needs: [prepare, publish, sign]
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Promote signed digest to runnable tags
+        env:
+          DIGEST: ${{ needs.publish.outputs.image-digest }}
+          GHCR_IMAGE: ${{ needs.prepare.outputs.ghcr-image }}
+          DOCKERHUB_IMAGE: ${{ needs.prepare.outputs.dockerhub-image }}
+          TAGS: ${{ needs.prepare.outputs.image-tags }}
+        run: |
+          if ! [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Unexpected signed multi-platform digest: ${DIGEST}"
+            exit 1
+          fi
+
+          promote_registry() {
+            local image="$1"
+            local tag
+            local resolved_digest
+            local -a tag_args=()
+            local -a promoted_tags=()
+
+            while IFS= read -r tag; do
+              if [[ "${tag}" == "${image}:"* ]]; then
+                tag_args+=(--tag "${tag}")
+                promoted_tags+=("${tag}")
+              fi
+            done <<< "${TAGS}"
+            if [ "${#tag_args[@]}" -eq 0 ]; then
+              echo "::error::No promotion tags were generated for ${image}."
+              exit 1
+            fi
+
+            docker buildx imagetools create \
+              "${tag_args[@]}" \
+              "${image}@${DIGEST}"
+
+            for tag in "${promoted_tags[@]}"; do
+              resolved_digest=$(docker buildx imagetools inspect "${tag}" \
+                --format '{{json .Manifest.Digest}}' | tr -d '"')
+              if [ "${resolved_digest}" != "${DIGEST}" ]; then
+                echo "::error::Promoted tag ${tag} resolved to ${resolved_digest}, expected ${DIGEST}."
+                exit 1
+              fi
+            done
+          }
+
+          promote_registry "${GHCR_IMAGE}"
+          promote_registry "${DOCKERHUB_IMAGE}"
+
+      - name: Write provider release metadata
+        env:
+          DIGEST: ${{ needs.publish.outputs.image-digest }}
+          PROVIDER: ${{ needs.prepare.outputs.provider }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release-tag }}
+          GHCR_IMAGE: ${{ needs.prepare.outputs.ghcr-image }}
+          DOCKERHUB_IMAGE: ${{ needs.prepare.outputs.dockerhub-image }}
+          TITLE: ${{ needs.prepare.outputs.title }}
+          DESCRIPTION: ${{ needs.prepare.outputs.description }}
+        run: |
+          output_dir="${RUNNER_TEMP}/provider-release-metadata"
+          mkdir -p "${output_dir}"
+          printf '%s\n' "${DIGEST}" > "${output_dir}/digest.txt"
+          printf '%s\n' "${PROVIDER}" > "${output_dir}/provider.txt"
+          printf '%s\n' "${VERSION}" > "${output_dir}/version.txt"
+          printf '%s\n' "${RELEASE_TAG}" > "${output_dir}/tag.txt"
+          printf '%s\n' "${GHCR_IMAGE}" > "${output_dir}/ghcr-image.txt"
+          printf '%s\n' "${DOCKERHUB_IMAGE}" > "${output_dir}/dockerhub-image.txt"
+          printf '%s\n' "${TITLE}" > "${output_dir}/title.txt"
+          printf '%s\n' "${DESCRIPTION}" > "${output_dir}/description.txt"
+
+      - name: Upload provider release metadata
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provider-release-metadata
+          path: ${{ runner.temp }}/provider-release-metadata/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish summary
+        env:
+          DIGEST: ${{ needs.publish.outputs.image-digest }}
+        run: |
+          {
+            echo "## Provider Image Published"
+            echo ""
+            echo "**Provider:** ${{ needs.prepare.outputs.provider }}"
+            echo "**Version:** ${{ needs.prepare.outputs.version }}"
+            echo "**Digest:** \`${DIGEST}\`"
+            echo ""
+            echo "Signed and verified in GHCR and Docker Hub."
+          } >> "${GITHUB_STEP_SUMMARY}"

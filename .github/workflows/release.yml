@@ -1,0 +1,225 @@
+---
+# Creates a provider-specific GitHub Release only after the image workflow has
+# published, scanned, signed, and verified the tagged image in both registries.
+
+name: Release
+
+on:
+  workflow_run:
+    workflows: ["Provider Image Release"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  create-release:
+    name: Create Provider GitHub Release
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: write
+      packages: read
+    steps:
+      - name: Checkout tagged commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Download provider release metadata
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: provider-release-metadata
+          path: provider-release-metadata
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate release metadata and tag ownership
+        id: release
+        run: |
+          metadata_dir=provider-release-metadata
+          for name in digest provider version tag ghcr-image dockerhub-image title description; do
+            if [ ! -s "${metadata_dir}/${name}.txt" ]; then
+              echo "::error::Provider image workflow did not publish ${name}.txt."
+              exit 1
+            fi
+          done
+
+          DIGEST=$(tr -d '[:space:]' < "${metadata_dir}/digest.txt")
+          PROVIDER=$(tr -d '[:space:]' < "${metadata_dir}/provider.txt")
+          VERSION=$(tr -d '[:space:]' < "${metadata_dir}/version.txt")
+          TAG=$(tr -d '[:space:]' < "${metadata_dir}/tag.txt")
+          GHCR_IMAGE=$(tr -d '[:space:]' < "${metadata_dir}/ghcr-image.txt")
+          DOCKERHUB_IMAGE=$(tr -d '[:space:]' < "${metadata_dir}/dockerhub-image.txt")
+
+          EXPECTED_TAG="${PROVIDER}-v${VERSION}"
+          EXPECTED_GHCR="ghcr.io/${{ github.repository_owner }}/pullbox-provider-${PROVIDER}"
+          EXPECTED_DOCKERHUB="docker.io/pullbox/pullbox-provider-${PROVIDER}"
+          if [ "${TAG}" != "${EXPECTED_TAG}" ]; then
+            echo "::error::Release tag ${TAG} does not match ${EXPECTED_TAG}."
+            exit 1
+          fi
+          if [ "${GHCR_IMAGE}" != "${EXPECTED_GHCR}" ] || [ "${DOCKERHUB_IMAGE}" != "${EXPECTED_DOCKERHUB}" ]; then
+            echo "::error::Provider image names do not match the trusted registry mapping."
+            exit 1
+          fi
+          if ! [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Unexpected release digest: ${DIGEST}"
+            exit 1
+          fi
+
+          TAG_SHA=$(git rev-list -n 1 "${TAG}")
+          if [ "${TAG_SHA}" != "${{ github.event.workflow_run.head_sha }}" ]; then
+            echo "::error::${TAG} points at ${TAG_SHA}, not the published image commit."
+            exit 1
+          fi
+
+          case "${PROVIDER}" in
+            getcomics) RELEASE_NAME="GetComics Provider" ;;
+            annas-archive) RELEASE_NAME="Anna's Archive Provider" ;;
+            synthetic) RELEASE_NAME="Synthetic Provider" ;;
+            *)
+              echo "::error::Unexpected provider in trusted release metadata: ${PROVIDER}"
+              exit 1
+              ;;
+          esac
+          if [[ "${VERSION}" =~ (a|b|rc)[0-9]+$ ]]; then
+            PRERELEASE=true
+          else
+            PRERELEASE=false
+          fi
+
+          {
+            echo "provider=${PROVIDER}"
+            echo "version=${VERSION}"
+            echo "tag=${TAG}"
+            echo "digest=${DIGEST}"
+            echo "ghcr-image=${GHCR_IMAGE}"
+            echo "dockerhub-image=${DOCKERHUB_IMAGE}"
+            echo "release-name=${RELEASE_NAME}"
+            echo "prerelease=${PRERELEASE}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Reverify both published signatures
+        env:
+          DIGEST: ${{ steps.release.outputs.digest }}
+          GHCR_IMAGE: ${{ steps.release.outputs.ghcr-image }}
+          DOCKERHUB_IMAGE: ${{ steps.release.outputs.dockerhub-image }}
+          CERTIFICATE_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/provider-release.yml@refs/tags/${{ steps.release.outputs.tag }}
+        run: |
+          cosign verify \
+            --certificate-identity "${CERTIFICATE_IDENTITY}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${GHCR_IMAGE}@${DIGEST}"
+          cosign verify \
+            --certificate-identity "${CERTIFICATE_IDENTITY}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${DOCKERHUB_IMAGE}@${DIGEST}"
+
+      - name: Generate provider release notes
+        env:
+          PROVIDER: ${{ steps.release.outputs.provider }}
+          VERSION: ${{ steps.release.outputs.version }}
+          TAG: ${{ steps.release.outputs.tag }}
+          DIGEST: ${{ steps.release.outputs.digest }}
+          GHCR_IMAGE: ${{ steps.release.outputs.ghcr-image }}
+          DOCKERHUB_IMAGE: ${{ steps.release.outputs.dockerhub-image }}
+        run: |
+          DESCRIPTION=$(cat provider-release-metadata/description.txt)
+          PREVIOUS_TAG=$(git tag --list "${PROVIDER}-v*" --sort=-version:refname | grep -Fxv "${TAG}" | head -1 || true)
+
+          {
+            echo "${DESCRIPTION}."
+            echo ""
+            echo "## Container Images"
+            echo ""
+            echo '```bash'
+            echo "docker pull ${GHCR_IMAGE}:${VERSION}"
+            echo "docker pull ${DOCKERHUB_IMAGE}:${VERSION}"
+            echo '```'
+            echo ""
+            echo "Both registry tags resolve to the same signed multi-architecture image."
+            echo ""
+            echo "**Digest:** \`${DIGEST}\`"
+            echo ""
+            echo "**Platforms:** \`linux/amd64\`, \`linux/arm64\`"
+            echo ""
+            echo "SBOM and provenance attestations are included."
+            echo ""
+            echo "## Verify Signatures"
+            echo ""
+            echo '```bash'
+            echo "cosign verify --certificate-identity 'https://github.com/${{ github.repository }}/.github/workflows/provider-release.yml@refs/tags/${TAG}' --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' ${GHCR_IMAGE}@${DIGEST}"
+            echo ""
+            echo "cosign verify --certificate-identity 'https://github.com/${{ github.repository }}/.github/workflows/provider-release.yml@refs/tags/${TAG}' --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' ${DOCKERHUB_IMAGE}@${DIGEST}"
+            echo '```'
+            echo ""
+            echo "## Compatibility"
+            echo ""
+            echo "This image implements Pullbox direct-download provider protocol v1."
+            echo "Provider containers are optional, independently deployable, and should remain on a private Docker network with Pullbox."
+            echo ""
+            if [ -n "${PREVIOUS_TAG}" ]; then
+              echo "**Full Changelog:** https://github.com/${{ github.repository }}/compare/${PREVIOUS_TAG}...${TAG}"
+            else
+              echo "**Source:** https://github.com/${{ github.repository }}/tree/${TAG}"
+            fi
+          } > release-notes.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_NAME: ${{ steps.release.outputs.release-name }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          PRERELEASE: ${{ steps.release.outputs.prerelease }}
+        run: |
+          release_args=(
+            --verify-tag
+            --title "${RELEASE_NAME} v${RELEASE_VERSION}"
+            --notes-file release-notes.md
+          )
+          if [ "${PRERELEASE}" = "true" ]; then
+            release_args+=(--prerelease)
+          fi
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "GitHub Release ${RELEASE_TAG} already exists; continuing with latest reconciliation."
+          else
+            gh release create "${RELEASE_TAG}" "${release_args[@]}"
+          fi
+
+      - name: Request deterministic latest reconciliation
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROVIDER: ${{ steps.release.outputs.provider }}
+        run: |
+          python - <<'PY' > provider-latest-event.json
+          import json
+          import os
+
+          print(
+              json.dumps(
+                  {
+                      "event_type": "provider-latest-reconcile",
+                      "client_payload": {"provider": os.environ["PROVIDER"]},
+                  }
+              )
+          )
+          PY
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/dispatches" \
+            --input provider-latest-event.json

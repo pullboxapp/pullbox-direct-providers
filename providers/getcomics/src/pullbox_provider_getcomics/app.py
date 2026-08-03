@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from importlib.metadata import PackageNotFoundError, version
 
 from fastapi import Depends, FastAPI
 from pullbox_provider_contract.api import (
@@ -29,7 +30,15 @@ from pullbox_provider_contract.source_http import BrowserChallengeRequiredError
 
 from pullbox_provider_getcomics.service import GetComicsProviderService
 
-_VERSION = "0.1.0.dev0"
+
+def _provider_version() -> str:
+    try:
+        return version("pullbox-provider-getcomics")
+    except PackageNotFoundError:
+        return version("pullbox-direct-providers")
+
+
+_VERSION = _provider_version()
 
 
 def create_app(

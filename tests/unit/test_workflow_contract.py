@@ -12,7 +12,11 @@ CI_WORKFLOW = WORKFLOW_DIR / "ci.yml"
 SECURITY_WORKFLOW = WORKFLOW_DIR / "security.yml"
 HYGIENE_WORKFLOW = WORKFLOW_DIR / "workflow-hygiene.yml"
 CONTAINER_WORKFLOW = WORKFLOW_DIR / "container-security.yml"
-RELEASE_WORKFLOW = WORKFLOW_DIR / "synthetic-release.yml"
+PROVIDER_RELEASE_WORKFLOW = WORKFLOW_DIR / "provider-release.yml"
+GITHUB_RELEASE_WORKFLOW = WORKFLOW_DIR / "release.yml"
+LATEST_RECONCILE_WORKFLOW = WORKFLOW_DIR / "provider-latest.yml"
+RELEASE_RESOLVER = ROOT / ".github" / "scripts" / "resolve-provider-release.py"
+LATEST_RELEASE_SELECTOR = ROOT / ".github" / "scripts" / "select-latest-provider-release.py"
 DEPENDABOT_CONFIG = ROOT / ".github" / "dependabot.yml"
 CODEQL_CONFIG = ROOT / ".github" / "codeql" / "codeql-config.yml"
 PINNED_ACTION = re.compile(r"uses:\s+[^@\s]+@[0-9a-f]{40}\s+#\s+v\S+")
@@ -115,7 +119,9 @@ def test_workflow_hygiene_runs_actionlint_and_contract_tests() -> None:
     assert {"actionlint", "contract-tests", "required"} <= set(jobs)
     assert jobs["required"]["name"] == "Workflow Hygiene Required"
     assert "rhysd/actionlint@sha256:" in text
-    assert "pytest tests/unit/test_workflow_contract.py" in text
+    assert "pytest" in text
+    assert "tests/unit/test_workflow_contract.py" in text
+    assert "tests/unit/test_provider_release_metadata.py" in text
 
 
 def test_container_security_builds_tests_and_scans_every_runtime_image() -> None:
@@ -163,24 +169,166 @@ def test_dependabot_covers_python_actions_and_each_dockerfile() -> None:
     assert all(entry["target-branch"] == "develop" for entry in updates)
 
 
-def test_synthetic_release_is_tag_or_manual_only_and_signs_the_published_digest() -> None:
-    workflow = _load_yaml(RELEASE_WORKFLOW)
-    text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+def test_provider_release_is_tag_or_manual_only() -> None:
+    workflow = _load_yaml(PROVIDER_RELEASE_WORKFLOW)
+    text = PROVIDER_RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    triggers = _triggers(workflow)
+
+    assert triggers["push"]["tags"] == [
+        "getcomics-v*",
+        "annas-archive-v*",
+        "synthetic-v*",
+    ]
+    assert set(triggers["workflow_dispatch"]["inputs"]["provider"]["options"]) == {
+        "getcomics",
+        "annas-archive",
+        "synthetic",
+    }
+    assert "tag_override" not in triggers["workflow_dispatch"]["inputs"]
+    assert workflow["permissions"] == {"contents": "read"}
+    assert "concurrency" not in workflow
+    assert "pull_request" not in triggers
+    assert "pull_request_target" not in text
+
+
+def test_tagged_provider_release_requires_a_commit_already_merged_to_main() -> None:
+    workflow = _load_yaml(PROVIDER_RELEASE_WORKFLOW)
+    prepare = workflow["jobs"]["prepare"]
+    text = PROVIDER_RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+    checkout = next(step for step in prepare["steps"] if step["name"] == "Checkout")
+    assert checkout["with"]["fetch-depth"] == 0
+    assert "git merge-base --is-ancestor" in text
+    assert "origin/main" in text
+    assert "github.ref_type == 'tag'" in text
+
+
+def test_provider_release_maps_each_provider_to_both_registries() -> None:
+    text = PROVIDER_RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    resolver_text = RELEASE_RESOLVER.read_text(encoding="utf-8")
+
+    for provider in ("getcomics", "annas-archive", "synthetic"):
+        assert f'dockerfile="docker/Dockerfile.{provider}"' in resolver_text
+        assert f'image_name="pullbox-provider-{provider}"' in resolver_text
+
+    assert '--repository-owner "${{ github.repository_owner }}"' in text
+    assert 'ghcr_image=f"ghcr.io/{repository_owner}/{definition.image_name}"' in resolver_text
+    assert 'dockerhub_image=f"docker.io/pullbox/{definition.image_name}"' in resolver_text
+    assert "DOCKERHUB_USERNAME" in text
+    assert "DOCKERHUB_TOKEN" in text
+
+
+def test_provider_release_validates_before_tagging_and_preserves_supply_chain_data() -> None:
+    workflow = _load_yaml(PROVIDER_RELEASE_WORKFLOW)
+    jobs = workflow["jobs"]
+    text = PROVIDER_RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+    expected_jobs = {
+        "prepare",
+        "build-amd64",
+        "build-arm64",
+        "validate-amd64",
+        "publish",
+        "sign",
+        "promote",
+    }
+    assert expected_jobs <= set(jobs)
+    assert set(jobs["publish"]["needs"]) == {
+        "prepare",
+        "build-amd64",
+        "build-arm64",
+        "validate-amd64",
+    }
+    assert "verify-container-vulnerability-baseline.py" in text
+    assert "linux/amd64" in text
+    assert "linux/arm64" in text
+    assert "provenance: mode=max" in text
+    assert "sbom: true" in text
+    assert "org.opencontainers.image.description" in text
+    assert "same immutable digest" in text
+
+    publish_text = yaml.safe_dump(jobs["publish"])
+    sign_text = yaml.safe_dump(jobs["sign"])
+    promote_text = yaml.safe_dump(jobs["promote"])
+    assert "candidate-${{ github.run_id }}-${{ github.run_attempt }}" in publish_text
+    assert "image-tags" not in publish_text
+    assert "image-tags" not in sign_text
+    assert "image-tags" in promote_text
+    assert jobs["promote"]["needs"] == ["prepare", "publish", "sign"]
+    assert "type=raw,value=latest" not in text
+    assert (
+        "type=sha,format=short,prefix=sha-,enable=${{ steps.release.outputs.is-release == 'true' }}"
+    ) in text
+
+
+def test_provider_release_signs_and_verifies_both_registry_digests() -> None:
+    workflow = _load_yaml(PROVIDER_RELEASE_WORKFLOW)
+    jobs = workflow["jobs"]
+    text = PROVIDER_RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "id-token: write" in text
+    assert "packages: write" in text
+    assert text.count("cosign sign --yes") >= 2
+    assert text.count("cosign verify") >= 2
+    assert jobs["sign"]["needs"] == ["prepare", "publish"]
+    assert "provider-release-metadata" not in yaml.safe_dump(jobs["sign"])
+    assert "provider-release-metadata" in yaml.safe_dump(jobs["promote"])
+
+
+def test_github_release_requires_a_successful_tagged_provider_release() -> None:
+    workflow = _load_yaml(GITHUB_RELEASE_WORKFLOW)
+    jobs = workflow["jobs"]
+    text = GITHUB_RELEASE_WORKFLOW.read_text(encoding="utf-8")
     triggers = _triggers(workflow)
 
     assert triggers == {
-        "push": {"tags": ["synthetic-v*"]},
-        "workflow_dispatch": {},
+        "workflow_run": {
+            "workflows": ["Provider Image Release"],
+            "types": ["completed"],
+        }
     }
-    assert workflow["permissions"] == {"contents": "read"}
-    assert workflow["concurrency"]["cancel-in-progress"] is False
-    assert "pull_request" not in triggers
-    assert "pull_request_target" not in text
-    assert "linux/amd64,linux/arm64" in text
-    assert "push: true" in text
-    assert "provenance: mode=max" in text
-    assert "sbom: true" in text
-    assert "id-token: write" in text
-    assert "packages: write" in text
-    assert "cosign sign --yes" in text
+    assert "concurrency" not in workflow
+    assert jobs["create-release"]["if"] == (
+        "github.event.workflow_run.conclusion == 'success' && "
+        "github.event.workflow_run.event == 'push'"
+    )
+    assert "softprops/action-gh-release" not in text
+    assert "gh release create" in text
+    assert "gh release view" in text
+    assert "actions/download-artifact@" in text
+    assert "provider-release-metadata" in text
     assert "cosign verify" in text
+    assert "(a|b|rc)[0-9]+$" in text
+    assert "provider-latest-reconcile" in text
+    assert "repos/${GITHUB_REPOSITORY}/dispatches" in text
+    assert "select-latest-provider-release.py" not in text
+    assert "Promote highest stable release to latest" not in text
+
+
+def test_latest_reconciliation_is_serialized_and_idempotent_per_provider() -> None:
+    workflow = _load_yaml(LATEST_RECONCILE_WORKFLOW)
+    jobs = workflow["jobs"]
+    text = LATEST_RECONCILE_WORKFLOW.read_text(encoding="utf-8")
+    triggers = _triggers(workflow)
+
+    assert triggers["repository_dispatch"]["types"] == ["provider-latest-reconcile"]
+    assert set(triggers["workflow_dispatch"]["inputs"]["provider"]["options"]) == {
+        "getcomics",
+        "annas-archive",
+        "synthetic",
+    }
+    assert workflow["concurrency"]["group"] == (
+        "provider-latest-${{ github.event.client_payload.provider || inputs.provider }}"
+    )
+    assert workflow["concurrency"]["cancel-in-progress"] is False
+    assert jobs["reconcile"]["permissions"] == {
+        "contents": "read",
+        "packages": "write",
+    }
+    assert "select-latest-provider-release.py" in text
+    assert "gh release list" in text
+    assert "cosign verify" in text
+    assert "Promote highest stable release to latest" in text
+    assert "docker buildx imagetools create" in text
+    assert "github.event.client_payload.provider" in text
+    assert LATEST_RELEASE_SELECTOR.exists()
