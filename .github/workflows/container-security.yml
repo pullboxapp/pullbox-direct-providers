@@ -58,7 +58,6 @@ jobs:
             dockerfile: docker/Dockerfile.annas-archive
     env:
       IMAGE: pullbox-provider-${{ matrix.provider }}:security-${{ github.run_id }}
-      PUBLIC_PYTHON_BASE: public.ecr.aws/docker/library/python:3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Build final runtime image
@@ -66,7 +65,6 @@ jobs:
           docker build \
             --file "${{ matrix.dockerfile }}" \
             --target runtime \
-            --build-arg "PYTHON_BASE=${PUBLIC_PYTHON_BASE}" \
             --tag "${IMAGE}" \
             .
       - name: Produce machine-readable Grype report
@@ -142,7 +140,6 @@ jobs:
           docker buildx build \
             --file "${{ matrix.dockerfile }}" \
             --target runtime \
-            --build-arg "PYTHON_BASE=public.ecr.aws/docker/library/python:3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6" \
             --platform linux/amd64,linux/arm64 \
             --output "type=oci,dest=${RUNNER_TEMP}/${{ matrix.provider }}.oci" \
             .

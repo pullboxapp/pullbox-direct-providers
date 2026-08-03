@@ -133,6 +133,7 @@ def test_container_security_builds_tests_and_scans_every_runtime_image() -> None
     assert "anchore/scan-action@" in text
     assert "verify-container-vulnerability-baseline.py" in text
     assert "linux/amd64,linux/arm64" in text
+    assert "PYTHON_BASE" not in text
     assert "if: always()" in text
     assert "if-no-files-found: ignore" in text
     assert "push: true" not in text
