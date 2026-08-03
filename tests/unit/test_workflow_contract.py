@@ -14,6 +14,7 @@ HYGIENE_WORKFLOW = WORKFLOW_DIR / "workflow-hygiene.yml"
 CONTAINER_WORKFLOW = WORKFLOW_DIR / "container-security.yml"
 PROVIDER_RELEASE_WORKFLOW = WORKFLOW_DIR / "provider-release.yml"
 GITHUB_RELEASE_WORKFLOW = WORKFLOW_DIR / "release.yml"
+LATEST_RECONCILE_WORKFLOW = WORKFLOW_DIR / "provider-latest.yml"
 RELEASE_RESOLVER = ROOT / ".github" / "scripts" / "resolve-provider-release.py"
 LATEST_RELEASE_SELECTOR = ROOT / ".github" / "scripts" / "select-latest-provider-release.py"
 DEPENDABOT_CONFIG = ROOT / ".github" / "dependabot.yml"
@@ -295,8 +296,36 @@ def test_github_release_requires_a_successful_tagged_provider_release() -> None:
     assert "provider-release-metadata" in text
     assert "cosign verify" in text
     assert "(a|b|rc)[0-9]+$" in text
-    assert "gh release list" in text
+    assert "provider-latest-reconcile" in text
+    assert "repos/${GITHUB_REPOSITORY}/dispatches" in text
+    assert "select-latest-provider-release.py" not in text
+    assert "Promote highest stable release to latest" not in text
+
+
+def test_latest_reconciliation_is_serialized_and_idempotent_per_provider() -> None:
+    workflow = _load_yaml(LATEST_RECONCILE_WORKFLOW)
+    jobs = workflow["jobs"]
+    text = LATEST_RECONCILE_WORKFLOW.read_text(encoding="utf-8")
+    triggers = _triggers(workflow)
+
+    assert triggers["repository_dispatch"]["types"] == ["provider-latest-reconcile"]
+    assert set(triggers["workflow_dispatch"]["inputs"]["provider"]["options"]) == {
+        "getcomics",
+        "annas-archive",
+        "synthetic",
+    }
+    assert workflow["concurrency"]["group"] == (
+        "provider-latest-${{ github.event.client_payload.provider || inputs.provider }}"
+    )
+    assert workflow["concurrency"]["cancel-in-progress"] is False
+    assert jobs["reconcile"]["permissions"] == {
+        "contents": "read",
+        "packages": "write",
+    }
     assert "select-latest-provider-release.py" in text
+    assert "gh release list" in text
+    assert "cosign verify" in text
     assert "Promote highest stable release to latest" in text
     assert "docker buildx imagetools create" in text
+    assert "github.event.client_payload.provider" in text
     assert LATEST_RELEASE_SELECTOR.exists()

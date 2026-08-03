@@ -21,7 +21,7 @@ jobs:
     permissions:
       actions: read
       contents: write
-      packages: write
+      packages: read
     steps:
       - name: Checkout tagged commit
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -202,88 +202,24 @@ jobs:
             gh release create "${RELEASE_TAG}" "${release_args[@]}"
           fi
 
-      - name: Select highest stable provider release
-        id: latest
+      - name: Request deterministic latest reconciliation
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PROVIDER: ${{ steps.release.outputs.provider }}
         run: |
-          gh release list \
-            --limit 1000 \
-            --json tagName,isDraft,isPrerelease \
-            > provider-releases.json
-          python .github/scripts/select-latest-provider-release.py \
-            --provider "${PROVIDER}" \
-            --releases provider-releases.json \
-            --github-output "${GITHUB_OUTPUT}"
+          python - <<'PY' > provider-latest-event.json
+          import json
+          import os
 
-      - name: Set up Docker Buildx for latest reconciliation
-        if: steps.latest.outputs.found == 'true'
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-
-      - name: Log in to Docker Hub for latest reconciliation
-        if: steps.latest.outputs.found == 'true'
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Promote highest stable release to latest
-        if: steps.latest.outputs.found == 'true'
-        env:
-          GHCR_IMAGE: ${{ steps.release.outputs.ghcr-image }}
-          DOCKERHUB_IMAGE: ${{ steps.release.outputs.dockerhub-image }}
-          LATEST_TAG: ${{ steps.latest.outputs.tag }}
-          LATEST_VERSION: ${{ steps.latest.outputs.version }}
-        run: |
-          GHCR_DIGEST=$(docker buildx imagetools inspect \
-            "${GHCR_IMAGE}:${LATEST_VERSION}" \
-            --format '{{json .Manifest.Digest}}' | tr -d '"')
-          DOCKERHUB_DIGEST=$(docker buildx imagetools inspect \
-            "${DOCKERHUB_IMAGE}:${LATEST_VERSION}" \
-            --format '{{json .Manifest.Digest}}' | tr -d '"')
-          if ! [[ "${GHCR_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "::error::Unexpected highest stable digest: ${GHCR_DIGEST}"
-            exit 1
-          fi
-          if [ "${GHCR_DIGEST}" != "${DOCKERHUB_DIGEST}" ]; then
-            echo "::error::Highest stable release differs between registries."
-            exit 1
-          fi
-
-          certificate_identity="https://github.com/${{ github.repository }}/.github/workflows/provider-release.yml@refs/tags/${LATEST_TAG}"
-          cosign verify \
-            --certificate-identity "${certificate_identity}" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-            "${GHCR_IMAGE}@${GHCR_DIGEST}"
-          cosign verify \
-            --certificate-identity "${certificate_identity}" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-            "${DOCKERHUB_IMAGE}@${DOCKERHUB_DIGEST}"
-
-          docker buildx imagetools create \
-            --tag "${GHCR_IMAGE}:latest" \
-            "${GHCR_IMAGE}@${GHCR_DIGEST}"
-          docker buildx imagetools create \
-            --tag "${DOCKERHUB_IMAGE}:latest" \
-            "${DOCKERHUB_IMAGE}@${DOCKERHUB_DIGEST}"
-
-          RESOLVED_GHCR=$(docker buildx imagetools inspect \
-            "${GHCR_IMAGE}:latest" \
-            --format '{{json .Manifest.Digest}}' | tr -d '"')
-          RESOLVED_DOCKERHUB=$(docker buildx imagetools inspect \
-            "${DOCKERHUB_IMAGE}:latest" \
-            --format '{{json .Manifest.Digest}}' | tr -d '"')
-          if [ "${RESOLVED_GHCR}" != "${GHCR_DIGEST}" ] || \
-             [ "${RESOLVED_DOCKERHUB}" != "${GHCR_DIGEST}" ]; then
-            echo "::error::Latest promotion did not preserve the signed digest."
-            exit 1
-          fi
-
-          {
-            echo "## Latest Provider Image Reconciled"
-            echo ""
-            echo "**Provider:** ${{ steps.release.outputs.provider }}"
-            echo "**Stable release:** ${LATEST_TAG}"
-            echo "**Digest:** \`${GHCR_DIGEST}\`"
-          } >> "${GITHUB_STEP_SUMMARY}"
+          print(
+              json.dumps(
+                  {
+                      "event_type": "provider-latest-reconcile",
+                      "client_payload": {"provider": os.environ["PROVIDER"]},
+                  }
+              )
+          )
+          PY
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/dispatches" \
+            --input provider-latest-event.json

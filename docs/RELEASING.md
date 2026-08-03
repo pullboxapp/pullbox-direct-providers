@@ -102,12 +102,15 @@ The `Provider Image Release` workflow then:
 8. Uploads trusted release metadata for the downstream `Release` workflow.
 
 The downstream workflow revalidates tag ownership and both signatures before
-creating the provider-specific GitHub Release. It then selects the highest
-published stable release for that provider, reverifies its signatures, and
-reconciles both registries' `latest` tags to that exact digest. This is
-idempotent and cannot move `latest` backward when provider releases complete
-out of order. Manual dispatches publish an `edge` image for release rehearsal
-but never create a GitHub Release or move `latest`.
+creating the provider-specific GitHub Release. It then dispatches the separate
+`Provider Latest Reconciliation` workflow. Reconciliation is serialized per
+provider, recomputes the highest published stable release when it starts,
+reverifies both signatures, and moves both registries' `latest` tags to that
+exact digest. Duplicate pending reconciliation requests are safe to replace
+because every run is idempotent and selects from all published stable releases;
+immutable release workflows are never placed in that concurrency group. Manual
+dispatches publish an `edge` image for release rehearsal but never create a
+GitHub Release or move `latest`.
 
 ## Post-Release Verification
 
@@ -134,8 +137,9 @@ supported user pull target. A failure after signed promotion but before GitHub
 Release creation leaves a signed, verified image without its release page;
 investigate and rerun the downstream release workflow without moving or
 recreating the immutable numbered tag. A failure while reconciling `latest`
-does not invalidate the numbered release; rerun the downstream workflow so it
-reselects the highest published stable release and repairs `latest`.
+does not invalidate the numbered release; manually dispatch `Provider Latest
+Reconciliation` for the affected provider so it reselects the highest published
+stable release and repairs `latest`.
 
 Provider rollback is independent from Pullbox. Pin the prior numbered provider
 tag or digest, recreate only that provider container, verify health and protocol
