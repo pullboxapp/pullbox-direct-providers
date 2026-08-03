@@ -71,6 +71,18 @@ def test_source_provider_images_are_independent_hardened_python_314_services() -
         assert f"providers/{other}" not in dockerfile
 
 
+def test_source_provider_healthchecks_test_process_liveness_without_upstream_work() -> None:
+    for path, _source_path in SOURCE_DOCKERFILES.values():
+        dockerfile = path.read_text(encoding="utf-8")
+        healthcheck = dockerfile.split("HEALTHCHECK", maxsplit=1)[1].split(
+            "ENTRYPOINT", maxsplit=1
+        )[0]
+
+        assert "socket.create_connection" in healthcheck
+        assert "/v1/health" not in healthcheck
+        assert "PULLBOX_PROVIDER_TOKEN" not in healthcheck
+
+
 def test_source_provider_smoke_has_no_ports_mounts_or_browser_privileges() -> None:
     compose = yaml.safe_load(SOURCE_COMPOSE_FILE.read_text(encoding="utf-8"))
 

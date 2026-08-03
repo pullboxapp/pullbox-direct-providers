@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from pullbox_provider_annas_archive.app import create_app
 from pullbox_provider_annas_archive.service import AnnasArchiveResolveResult
 from pullbox_provider_contract.errors import ProtocolError
-from pullbox_provider_contract.models import Candidate, QuotaStatus
+from pullbox_provider_contract.models import Candidate, ParsedCandidate, QuotaStatus
 
 from tests.conftest import TEST_TOKEN, resolve_payload, search_payload
 
@@ -16,9 +16,16 @@ MEMBER_SECRET = "member-secret-never-rendered"
 
 
 class _AnnaService:
-    def __init__(self, *, available: bool = True, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        available: bool = True,
+        error: Exception | None = None,
+        candidates: list[Candidate] | None = None,
+    ) -> None:
         self.available = available
         self.error = error
+        self.candidates = candidates or []
         self.search_kwargs: dict[str, object] | None = None
         self.resolve_kwargs: dict[str, object] | None = None
 
@@ -36,7 +43,7 @@ class _AnnaService:
         self.search_kwargs = kwargs
         if self.error is not None:
             raise self.error
-        return []
+        return self.candidates[: int(kwargs["limit"])]
 
     async def resolve(self, _candidate_id: str, **kwargs: object) -> AnnasArchiveResolveResult:
         self.resolve_kwargs = kwargs
@@ -225,3 +232,39 @@ async def test_anna_health_reports_each_official_domain_independently() -> None:
         "source.annas-archive.pk": "unreachable",
         "source.annas-archive.gd": "unreachable",
     }
+
+
+def _candidate(number: int) -> Candidate:
+    title = f"Example {number}"
+    return Candidate(
+        provider_candidate_id=f"anna:{number:032x}",
+        source_reference=f"https://annas-archive.gd/md5/{number:032x}",
+        display_title=title,
+        raw_title=title,
+        parsed=ParsedCandidate(series_title="Example", issue_numbers=[str(number)]),
+        provider_confidence=1,
+    )
+
+
+@pytest.mark.parametrize(
+    ("candidate_count", "expected_truncated"),
+    [(2, False), (3, True)],
+)
+async def test_anna_search_reports_truncation_only_when_results_were_dropped(
+    candidate_count: int,
+    expected_truncated: bool,
+) -> None:
+    service = _AnnaService(candidates=[_candidate(index) for index in range(candidate_count)])
+
+    response = await _request(
+        _app(service),
+        "POST",
+        "/v1/search",
+        json=search_payload(limit=2),
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()["candidates"]) == 2
+    assert response.json()["truncated"] is expected_truncated
+    assert service.search_kwargs is not None
+    assert service.search_kwargs["limit"] == 3

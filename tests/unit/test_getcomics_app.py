@@ -5,7 +5,7 @@ from typing import Any
 import httpx
 import pytest
 from fastapi import FastAPI
-from pullbox_provider_contract.models import Artifact, Candidate
+from pullbox_provider_contract.models import Artifact, Candidate, ParsedCandidate
 from pullbox_provider_contract.resolver import ProviderResolverError
 from pullbox_provider_contract.source_http import BrowserChallengeRequiredError
 from pullbox_provider_getcomics.app import create_app
@@ -14,9 +14,16 @@ from tests.conftest import TEST_TOKEN, resolve_payload, search_payload
 
 
 class _GetComicsService:
-    def __init__(self, *, available: bool = True, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        available: bool = True,
+        error: Exception | None = None,
+        candidates: list[Candidate] | None = None,
+    ) -> None:
         self.available = available
         self.error = error
+        self.candidates = candidates or []
         self.search_kwargs: dict[str, object] | None = None
         self.resolve_kwargs: dict[str, object] | None = None
 
@@ -27,7 +34,7 @@ class _GetComicsService:
         self.search_kwargs = kwargs
         if self.error is not None:
             raise self.error
-        return []
+        return self.candidates[: int(kwargs["limit"])]
 
     async def resolve(self, _candidate_id: str, **kwargs: object) -> list[Artifact]:
         self.resolve_kwargs = kwargs
@@ -186,3 +193,39 @@ async def test_getcomics_preserves_browser_challenge_classification() -> None:
         "message": "GetComics browser resolver attempt failed.",
     }
     assert "secret resolver detail" not in resolver_failure.text
+
+
+def _candidate(number: int) -> Candidate:
+    title = f"Example {number}"
+    return Candidate(
+        provider_candidate_id=f"candidate-{number}",
+        source_reference=f"https://getcomics.org/example-{number}/",
+        display_title=title,
+        raw_title=title,
+        parsed=ParsedCandidate(series_title="Example", issue_numbers=[str(number)]),
+        provider_confidence=1,
+    )
+
+
+@pytest.mark.parametrize(
+    ("candidate_count", "expected_truncated"),
+    [(2, False), (3, True)],
+)
+async def test_getcomics_search_reports_truncation_only_when_results_were_dropped(
+    candidate_count: int,
+    expected_truncated: bool,
+) -> None:
+    service = _GetComicsService(candidates=[_candidate(index) for index in range(candidate_count)])
+
+    response = await _request(
+        _app(service),
+        "POST",
+        "/v1/search",
+        json=search_payload(limit=2),
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()["candidates"]) == 2
+    assert response.json()["truncated"] is expected_truncated
+    assert service.search_kwargs is not None
+    assert service.search_kwargs["limit"] == 3

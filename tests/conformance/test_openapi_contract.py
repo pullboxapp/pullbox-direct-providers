@@ -44,3 +44,17 @@ def test_search_and_resolve_are_bounded_and_have_no_callback_contract() -> None:
     assert "deadline" in schemas["ResolveRequest"]["required"]
     assert "callback_url" not in str(document)
     assert "destination_path" not in str(document)
+
+
+def test_openapi_matches_runtime_resolver_modes_and_artifact_size_metadata() -> None:
+    document = yaml.safe_load(SPEC_PATH.read_text(encoding="utf-8"))
+    schemas = document["components"]["schemas"]
+
+    assert schemas["ResolverProfile"]["properties"]["mode"]["enum"] == [
+        "flaresolverr_v1",
+        "trawl_scrape",
+    ]
+    assert schemas["Artifact"]["properties"]["size_is_estimate"] == {
+        "type": "boolean",
+        "default": False,
+    }

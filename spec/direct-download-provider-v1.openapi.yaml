@@ -260,6 +260,7 @@ components:
           type: string
         mode:
           type: string
+          enum: [flaresolverr_v1, trawl_scrape]
         timeout_seconds:
           type: number
           exclusiveMinimum: 0
@@ -536,6 +537,9 @@ components:
         size_bytes:
           type: [integer, "null"]
           minimum: 0
+        size_is_estimate:
+          type: boolean
+          default: false
         mirrors:
           type: array
           maxItems: 50

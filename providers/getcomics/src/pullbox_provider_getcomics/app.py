@@ -114,7 +114,7 @@ def create_app(
             candidates = await within_deadline(
                 provider_service.search(
                     payload.intent,
-                    limit=payload.limit,
+                    limit=payload.limit + 1,
                     resolver_profile=payload.resolver_profile,
                 ),
                 payload.deadline,
@@ -139,8 +139,8 @@ def create_app(
             ) from exc
         return SearchResponse(
             request_id=payload.request_id,
-            candidates=candidates,
-            truncated=len(candidates) >= payload.limit,
+            candidates=candidates[: payload.limit],
+            truncated=len(candidates) > payload.limit,
         )
 
     @app.post(
