@@ -1,0 +1,54 @@
+ARG PYTHON_BASE=python:3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6
+
+FROM ${PYTHON_BASE} AS build
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /build
+
+COPY LICENSE README.md pyproject.toml ./
+COPY packages/provider_contract packages/provider_contract
+COPY providers/synthetic providers/synthetic
+
+RUN python -m pip wheel --wheel-dir /wheels .
+
+FROM ${PYTHON_BASE} AS runtime
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+COPY --from=build /wheels /wheels
+RUN python -m pip install /wheels/*.whl && rm -rf /wheels
+
+USER 65532:65532
+EXPOSE 8780
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+    CMD ["python", "-c", "import os,urllib.request; r=urllib.request.Request('http://127.0.0.1:8780/v1/health', headers={'Authorization': 'Bearer '+os.environ['PULLBOX_PROVIDER_TOKEN']}); assert urllib.request.urlopen(r, timeout=2).status == 200"]
+
+ENTRYPOINT ["python", "-m", "uvicorn"]
+CMD ["pullbox_provider_synthetic.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8780", "--no-access-log"]
+
+FROM ${PYTHON_BASE} AS conformance
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /workspace
+
+COPY LICENSE README.md pyproject.toml ./
+COPY packages/provider_contract packages/provider_contract
+COPY providers/synthetic providers/synthetic
+COPY spec spec
+COPY tests tests
+
+RUN python -m pip install '.[dev]'
+
+USER 65532:65532
+
+CMD ["python", "-m", "pytest", "tests/integration/test_live_provider.py", "-q", "-o", "cache_dir=/tmp/pytest-cache"]

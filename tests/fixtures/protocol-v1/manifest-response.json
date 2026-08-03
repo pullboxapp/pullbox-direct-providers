@@ -1,0 +1,37 @@
+{
+  "protocol_version": "direct-download-provider/v1",
+  "provider_id": "pullbox.synthetic",
+  "display_name": "Pullbox Synthetic Provider",
+  "description": "Deterministic reference provider for protocol conformance.",
+  "provider_version": "0.1.0.dev0",
+  "supported_protocol_versions": [
+    "direct-download-provider/v1"
+  ],
+  "publisher": "Pullbox",
+  "license": "GPL-3.0-or-later",
+  "homepage_url": "https://provider.test",
+  "documentation_url": "https://provider.test/docs",
+  "support_url": "https://provider.test/support",
+  "source_domains": [
+    "provider.test"
+  ],
+  "artifact_host_patterns": [],
+  "capabilities": {
+    "search": true,
+    "resolve": true,
+    "browser_challenge": false,
+    "health": true,
+    "quota": false,
+    "configuration_schema": true
+  },
+  "configuration_schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "min_pullbox_version": null,
+  "max_pullbox_version": null,
+  "build": {
+    "revision": "synthetic"
+  }
+}

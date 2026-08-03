@@ -1,0 +1,589 @@
+openapi: 3.1.0
+info:
+  title: Pullbox Direct Download Provider Protocol
+  version: 1.0.0
+  x-pullbox-protocol-version: direct-download-provider/v1
+  description: >-
+    Authenticated, stateless discovery and resolution contract for optional
+    Pullbox direct-download providers. Providers never receive library paths,
+    artifact-host credentials, Pullbox sessions, database access, callbacks, or
+    container-management authority.
+servers:
+  - url: http://provider:8080
+    description: Private container-network example only
+paths:
+  /v1/manifest:
+    get:
+      operationId: getManifest
+      x-pullbox-protocol-version: direct-download-provider/v1
+      security:
+        - providerBearer: []
+      responses:
+        "200":
+          description: Provider identity and capabilities
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManifestResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /v1/health:
+    get:
+      operationId: getHealth
+      x-pullbox-protocol-version: direct-download-provider/v1
+      security:
+        - providerBearer: []
+      responses:
+        "200":
+          description: Process and source health
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /v1/search:
+    post:
+      operationId: search
+      x-pullbox-protocol-version: direct-download-provider/v1
+      security:
+        - providerBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+      responses:
+        "200":
+          description: Bounded normalized candidates
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "408":
+          $ref: "#/components/responses/DeadlineExceeded"
+        "409":
+          $ref: "#/components/responses/IncompatibleProtocol"
+        "422":
+          description: Malformed request
+  /v1/resolve:
+    post:
+      operationId: resolve
+      x-pullbox-protocol-version: direct-download-provider/v1
+      security:
+        - providerBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveRequest"
+      responses:
+        "200":
+          description: Normalized artifact and mirror graph
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResolveResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Candidate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "408":
+          $ref: "#/components/responses/DeadlineExceeded"
+        "409":
+          $ref: "#/components/responses/IncompatibleProtocol"
+        "422":
+          description: Malformed request
+components:
+  securitySchemes:
+    providerBearer:
+      type: http
+      scheme: bearer
+  responses:
+    Unauthorized:
+      description: Provider bearer authentication failed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    DeadlineExceeded:
+      description: Request deadline elapsed before source work completed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    IncompatibleProtocol:
+      description: Requested protocol version is unsupported
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            retry_after_seconds:
+              type: integer
+              minimum: 0
+              maximum: 86400
+              description: Optional bounded delay before retrying this operation.
+    ProviderCapabilities:
+      type: object
+      required: [search, resolve, browser_challenge, health, quota, configuration_schema]
+      properties:
+        search:
+          type: boolean
+        resolve:
+          type: boolean
+        browser_challenge:
+          type: boolean
+        health:
+          type: boolean
+        quota:
+          type: boolean
+        configuration_schema:
+          type: boolean
+    ManifestResponse:
+      type: object
+      required:
+        - protocol_version
+        - provider_id
+        - display_name
+        - description
+        - provider_version
+        - supported_protocol_versions
+        - publisher
+        - license
+        - source_domains
+        - capabilities
+        - configuration_schema
+      properties:
+        protocol_version:
+          const: direct-download-provider/v1
+        provider_id:
+          type: string
+        display_name:
+          type: string
+        description:
+          type: string
+        provider_version:
+          type: string
+        supported_protocol_versions:
+          type: array
+          items:
+            type: string
+        publisher:
+          type: string
+        license:
+          type: string
+        homepage_url:
+          type: [string, "null"]
+        documentation_url:
+          type: [string, "null"]
+        support_url:
+          type: [string, "null"]
+        source_domains:
+          type: array
+          items:
+            type: string
+        artifact_host_patterns:
+          type: array
+          items:
+            type: string
+        capabilities:
+          $ref: "#/components/schemas/ProviderCapabilities"
+        configuration_schema:
+          type: object
+        min_pullbox_version:
+          type: [string, "null"]
+        max_pullbox_version:
+          type: [string, "null"]
+        build:
+          type: object
+          additionalProperties:
+            type: string
+    HealthResponse:
+      type: object
+      required:
+        - protocol_version
+        - process_status
+        - source_status
+        - message
+        - retry_after_seconds
+        - diagnostics
+      properties:
+        protocol_version:
+          const: direct-download-provider/v1
+        process_status:
+          $ref: "#/components/schemas/ProviderStatus"
+        source_status:
+          $ref: "#/components/schemas/ProviderStatus"
+        message:
+          type: string
+        retry_after_seconds:
+          type: [integer, "null"]
+          minimum: 0
+        diagnostics:
+          type: object
+    ProviderStatus:
+      type: string
+      enum:
+        - healthy
+        - degraded
+        - rate_limited
+        - challenge_required
+        - authentication_required
+        - incompatible
+        - unavailable
+    ResolverProfile:
+      type: object
+      required: [endpoint, mode, timeout_seconds, max_concurrency, declared_domains]
+      properties:
+        endpoint:
+          type: string
+        mode:
+          type: string
+          enum: [flaresolverr_v1, trawl_scrape]
+        timeout_seconds:
+          type: number
+          exclusiveMinimum: 0
+          maximum: 300
+        max_concurrency:
+          type: integer
+          minimum: 1
+          maximum: 4
+        declared_domains:
+          type: array
+          items:
+            type: string
+        authentication_headers:
+          type: object
+          additionalProperties:
+            type: string
+    SearchIntent:
+      type: object
+      required: [series_title, normalized_title]
+      properties:
+        series_title:
+          type: string
+          minLength: 1
+          maxLength: 500
+        normalized_title:
+          type: string
+          minLength: 1
+          maxLength: 500
+        alternate_titles:
+          type: array
+          maxItems: 25
+          items:
+            type: string
+        issue_number:
+          type: [string, "null"]
+        issue_type:
+          type: [string, "null"]
+        volume:
+          type: [string, "null"]
+        issue_title:
+          type: [string, "null"]
+          maxLength: 500
+        series_year:
+          type: [integer, "null"]
+          minimum: 1800
+          maximum: 2200
+        release_year:
+          type: [integer, "null"]
+          minimum: 1800
+          maximum: 2200
+        year:
+          type: [integer, "null"]
+          minimum: 1800
+          maximum: 2200
+        publisher:
+          type: [string, "null"]
+        language:
+          type: [string, "null"]
+        preferred_formats:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+        quality_preferences:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+    SearchRequest:
+      type: object
+      required:
+        - protocol_version
+        - request_id
+        - deadline
+        - intent
+        - limit
+      properties:
+        protocol_version:
+          type: string
+        request_id:
+          type: string
+          format: uuid
+        deadline:
+          type: string
+          format: date-time
+        intent:
+          $ref: "#/components/schemas/SearchIntent"
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        provider_config:
+          type: object
+        source_credentials:
+          type: object
+          additionalProperties:
+            type: string
+          writeOnly: true
+        resolver_profile:
+          oneOf:
+            - $ref: "#/components/schemas/ResolverProfile"
+            - type: "null"
+    ParsedCandidate:
+      type: object
+      required: [series_title]
+      properties:
+        series_title:
+          type: string
+        issue_numbers:
+          type: array
+          items:
+            type: string
+        volume:
+          type: [string, "null"]
+        year:
+          type: [integer, "null"]
+        publisher:
+          type: [string, "null"]
+        language:
+          type: [string, "null"]
+        edition:
+          type: [string, "null"]
+        format:
+          type: [string, "null"]
+        release_group:
+          type: [string, "null"]
+        quality:
+          type: [string, "null"]
+    Candidate:
+      type: object
+      required:
+        - provider_candidate_id
+        - source_reference
+        - display_title
+        - raw_title
+        - parsed
+        - provider_confidence
+        - can_resolve
+      properties:
+        provider_candidate_id:
+          type: string
+        source_reference:
+          type: string
+        display_title:
+          type: string
+        raw_title:
+          type: string
+        parsed:
+          $ref: "#/components/schemas/ParsedCandidate"
+        provider_confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        provenance:
+          type: object
+        can_resolve:
+          type: boolean
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+    SearchResponse:
+      type: object
+      required: [protocol_version, request_id, candidates, truncated]
+      properties:
+        protocol_version:
+          const: direct-download-provider/v1
+        request_id:
+          type: string
+          format: uuid
+        candidates:
+          type: array
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/Candidate"
+        truncated:
+          type: boolean
+    ResolveRequest:
+      type: object
+      required:
+        - protocol_version
+        - request_id
+        - deadline
+        - provider_candidate_id
+      properties:
+        protocol_version:
+          type: string
+        request_id:
+          type: string
+          format: uuid
+        deadline:
+          type: string
+          format: date-time
+        provider_candidate_id:
+          type: string
+        provider_config:
+          type: object
+        source_credentials:
+          type: object
+          additionalProperties:
+            type: string
+          writeOnly: true
+        resolver_profile:
+          oneOf:
+            - $ref: "#/components/schemas/ResolverProfile"
+            - type: "null"
+    ArtifactCoverage:
+      type: object
+      properties:
+        issue_numbers:
+          type: array
+          items:
+            type: string
+        issue_ids:
+          type: array
+          items:
+            type: string
+        volume:
+          type: [string, "null"]
+        description:
+          type: [string, "null"]
+    Mirror:
+      type: object
+      required: [mirror_id, host_kind]
+      properties:
+        mirror_id:
+          type: string
+        host_kind:
+          type: string
+        share_url:
+          type: [string, "null"]
+        final_url:
+          type: [string, "null"]
+        source_headers:
+          type: object
+          additionalProperties:
+            type: string
+          writeOnly: true
+        size_bytes:
+          type: [integer, "null"]
+          minimum: 0
+        checksum:
+          type: [string, "null"]
+        etag:
+          type: [string, "null"]
+        last_modified:
+          type: [string, "null"]
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+        retry_after_seconds:
+          type: [integer, "null"]
+          minimum: 0
+    Artifact:
+      type: object
+      required: [artifact_id, coverage, route, mirrors]
+      properties:
+        artifact_id:
+          type: string
+        coverage:
+          $ref: "#/components/schemas/ArtifactCoverage"
+        route:
+          type: string
+          enum: [direct_artifact, torrent_file, magnet]
+        format:
+          type: [string, "null"]
+        quality:
+          type: [string, "null"]
+        language:
+          type: [string, "null"]
+        edition:
+          type: [string, "null"]
+        release_group:
+          type: [string, "null"]
+        size_bytes:
+          type: [integer, "null"]
+          minimum: 0
+        size_is_estimate:
+          type: boolean
+          default: false
+        mirrors:
+          type: array
+          maxItems: 50
+          items:
+            $ref: "#/components/schemas/Mirror"
+        magnet_uri:
+          type: [string, "null"]
+        limitations:
+          type: array
+          items:
+            type: string
+    QuotaStatus:
+      type: object
+      properties:
+        remaining:
+          type: [integer, "null"]
+          minimum: 0
+          maximum: 1000000
+        limit:
+          type: [integer, "null"]
+          minimum: 0
+          maximum: 1000000
+        window_seconds:
+          type: [integer, "null"]
+          minimum: 1
+          maximum: 31536000
+        reset_at:
+          type: [string, "null"]
+          format: date-time
+    ResolveResponse:
+      type: object
+      required: [protocol_version, request_id, artifacts]
+      properties:
+        protocol_version:
+          const: direct-download-provider/v1
+        request_id:
+          type: string
+          format: uuid
+        artifacts:
+          type: array
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/Artifact"
+        quota:
+          oneOf:
+            - $ref: "#/components/schemas/QuotaStatus"
+            - type: "null"

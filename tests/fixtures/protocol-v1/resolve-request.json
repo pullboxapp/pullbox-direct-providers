@@ -1,0 +1,9 @@
+{
+  "protocol_version": "direct-download-provider/v1",
+  "request_id": "22222222-2222-4222-8222-222222222222",
+  "deadline": "2099-07-27T12:00:00Z",
+  "provider_config": {},
+  "source_credentials": {},
+  "resolver_profile": null,
+  "provider_candidate_id": "synthetic-issue-1"
+}
