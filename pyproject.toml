@@ -20,7 +20,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "bandit>=1.8,<2",
-    "mypy>=1.15,<2",
+    "mypy>=1.15,<3",
     "pip-audit>=2.9,<3",
     "pytest>=8.3,<10",
     "pytest-asyncio>=0.25,<2",
