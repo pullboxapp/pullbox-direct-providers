@@ -1,0 +1,41 @@
+{
+  "protocol_version": "direct-download-provider/v1",
+  "request_id": "22222222-2222-4222-8222-222222222222",
+  "artifacts": [
+    {
+      "artifact_id": "artifact-1",
+      "coverage": {
+        "issue_numbers": [
+          "1"
+        ],
+        "issue_ids": [],
+        "volume": null,
+        "description": null
+      },
+      "route": "direct_artifact",
+      "format": "cbz",
+      "quality": "digital",
+      "language": "en",
+      "edition": null,
+      "release_group": null,
+      "size_bytes": 1024,
+      "mirrors": [
+        {
+          "mirror_id": "mirror-1",
+          "host_kind": "generic_https",
+          "share_url": null,
+          "final_url": "https://provider.test/files/1.cbz",
+          "source_headers": {},
+          "size_bytes": 1024,
+          "checksum": null,
+          "etag": "synthetic-1",
+          "last_modified": null,
+          "expires_at": null,
+          "retry_after_seconds": null
+        }
+      ],
+      "magnet_uri": null,
+      "limitations": []
+    }
+  ]
+}

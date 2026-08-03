@@ -1,0 +1,10 @@
+ARG PYTHON_BASE=python:3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6
+FROM ${PYTHON_BASE}
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /smoke
+COPY docker/provider_smoke.py /smoke/provider_smoke.py
+USER 65532:65532
+CMD ["python", "/smoke/provider_smoke.py"]

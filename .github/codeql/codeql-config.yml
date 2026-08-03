@@ -1,0 +1,8 @@
+name: pullbox-direct-provider-runtime
+
+paths:
+  - packages/**/src
+  - providers/**/src
+
+paths-ignore:
+  - tests/**

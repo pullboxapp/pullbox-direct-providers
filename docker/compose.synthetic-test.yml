@@ -1,0 +1,49 @@
+services:
+  synthetic:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.synthetic
+      target: runtime
+      args:
+        PYTHON_BASE: ${PYTHON_BASE:-mirror.gcr.io/library/python:3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6}
+    image: pullbox-provider-synthetic:dd0-test
+    environment:
+      PULLBOX_PROVIDER_TOKEN: ${PULLBOX_PROVIDER_TOKEN:-synthetic-conformance-token-00000000}
+    user: "65532:65532"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - provider-test
+
+  conformance:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.synthetic
+      target: conformance
+      args:
+        PYTHON_BASE: ${PYTHON_BASE:-mirror.gcr.io/library/python:3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6}
+    environment:
+      PULLBOX_PROVIDER_BASE_URL: http://synthetic:8780
+      PULLBOX_PROVIDER_TOKEN: ${PULLBOX_PROVIDER_TOKEN:-synthetic-conformance-token-00000000}
+    user: "65532:65532"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      synthetic:
+        condition: service_healthy
+    networks:
+      - provider-test
+
+networks:
+  provider-test:
+    internal: true
