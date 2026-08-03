@@ -92,8 +92,8 @@ def resolve_release(
     else:
         if provider not in PROVIDERS:
             raise ValueError(f"Unsupported provider: {provider}")
-        if version != "edge" and SEMVER.fullmatch(version) is None:
-            raise ValueError("Manual image tag must be edge or a semantic version")
+        if version != "edge":
+            raise ValueError("Manual image releases must use edge")
 
     definition = PROVIDERS[provider]
     root = repository_root or Path(__file__).parents[2]

@@ -21,11 +21,6 @@ on:
           - getcomics
           - annas-archive
           - synthetic
-      tag_override:
-        description: "Non-release image tag"
-        required: false
-        default: edge
-        type: string
 
 permissions:
   contents: read
@@ -76,13 +71,12 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
           MANUAL_PROVIDER: ${{ inputs.provider || '' }}
-          MANUAL_VERSION: ${{ inputs.tag_override || 'edge' }}
         run: |
           python .github/scripts/resolve-provider-release.py \
             --repository-owner "${{ github.repository_owner }}" \
             --tag "${RELEASE_TAG}" \
             --provider "${MANUAL_PROVIDER}" \
-            --version "${MANUAL_VERSION}" \
+            --version edge \
             --github-output "${GITHUB_OUTPUT}"
 
       - name: Generate OCI image metadata

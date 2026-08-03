@@ -64,6 +64,15 @@ def test_manual_release_uses_edge_without_creating_a_github_release() -> None:
     assert release.is_prerelease is False
 
 
+def test_manual_release_rejects_numbered_tags() -> None:
+    with pytest.raises(ValueError, match="Manual image releases must use edge"):
+        _load_module().resolve_release(
+            repository_owner="pullboxapp",
+            provider="getcomics",
+            version="1.0.0",
+        )
+
+
 @pytest.mark.parametrize(
     "tag",
     [

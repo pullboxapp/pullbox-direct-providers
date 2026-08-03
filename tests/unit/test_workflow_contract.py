@@ -182,6 +182,7 @@ def test_provider_release_is_tag_or_manual_only() -> None:
         "annas-archive",
         "synthetic",
     }
+    assert "tag_override" not in triggers["workflow_dispatch"]["inputs"]
     assert workflow["permissions"] == {"contents": "read"}
     assert workflow["concurrency"]["cancel-in-progress"] is False
     assert "pull_request" not in triggers
