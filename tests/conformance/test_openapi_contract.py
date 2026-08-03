@@ -58,3 +58,13 @@ def test_openapi_matches_runtime_resolver_modes_and_artifact_size_metadata() -> 
         "type": "boolean",
         "default": False,
     }
+
+
+def test_openapi_documents_runtime_source_and_quota_failures() -> None:
+    document = yaml.safe_load(SPEC_PATH.read_text(encoding="utf-8"))
+    search_responses = document["paths"]["/v1/search"]["post"]["responses"]
+    resolve_responses = document["paths"]["/v1/resolve"]["post"]["responses"]
+
+    assert search_responses["503"] == {"$ref": "#/components/responses/SourceUnavailable"}
+    assert resolve_responses["429"] == {"$ref": "#/components/responses/SourceQuotaLimited"}
+    assert resolve_responses["503"] == {"$ref": "#/components/responses/SourceUnavailable"}

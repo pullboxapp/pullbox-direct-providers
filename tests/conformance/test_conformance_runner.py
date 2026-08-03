@@ -15,6 +15,16 @@ from tests.conftest import TEST_TOKEN
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "protocol-v1"
 
 
+class _OversizedChunkStream(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.emitted_chunks = 0
+
+    async def __aiter__(self):
+        for _index in range(10):
+            self.emitted_chunks += 1
+            yield b"x" * (1024 * 1024)
+
+
 def _fixture(name: str) -> dict[str, object]:
     value = json.loads((FIXTURES / name).read_text(encoding="utf-8"))
     assert isinstance(value, dict)
@@ -103,6 +113,20 @@ async def test_runner_rejects_malformed_json_without_echoing_response() -> None:
 
     assert exc_info.value.code == "malformed_response"
     assert "secret-material" not in str(exc_info.value)
+
+
+async def test_runner_aborts_stream_as_soon_as_response_exceeds_limit() -> None:
+    stream = _OversizedChunkStream()
+    transport = httpx.MockTransport(lambda _request: httpx.Response(200, stream=stream))
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="https://provider.test",
+    ) as client:
+        with pytest.raises(ConformanceError) as exc_info:
+            await run_provider_conformance(client=client, bearer_token=TEST_TOKEN)
+
+    assert exc_info.value.code == "response_too_large"
+    assert stream.emitted_chunks == 3
 
 
 async def test_runner_requires_a_resolvable_search_candidate() -> None:
