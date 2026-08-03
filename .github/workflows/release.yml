@@ -12,10 +12,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: provider-github-release-${{ github.event.workflow_run.head_sha || github.run_id }}
-  cancel-in-progress: false
-
 jobs:
   create-release:
     name: Create Provider GitHub Release
@@ -91,7 +87,7 @@ jobs:
               exit 1
               ;;
           esac
-          if [[ "${VERSION}" == *-* ]]; then
+          if [[ "${VERSION}" =~ (a|b|rc)[0-9]+$ ]]; then
             PRERELEASE=true
           else
             PRERELEASE=false
@@ -200,4 +196,30 @@ jobs:
           if [ "${PRERELEASE}" = "true" ]; then
             release_args+=(--prerelease)
           fi
-          gh release create "${RELEASE_TAG}" "${release_args[@]}"
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "GitHub Release ${RELEASE_TAG} already exists; continuing with latest reconciliation."
+          else
+            gh release create "${RELEASE_TAG}" "${release_args[@]}"
+          fi
+
+      - name: Request deterministic latest reconciliation
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROVIDER: ${{ steps.release.outputs.provider }}
+        run: |
+          python - <<'PY' > provider-latest-event.json
+          import json
+          import os
+
+          print(
+              json.dumps(
+                  {
+                      "event_type": "provider-latest-reconcile",
+                      "client_payload": {"provider": os.environ["PROVIDER"]},
+                  }
+              )
+          )
+          PY
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/dispatches" \
+            --input provider-latest-event.json

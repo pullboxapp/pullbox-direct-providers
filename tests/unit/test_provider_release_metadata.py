@@ -7,10 +7,20 @@ import pytest
 
 ROOT = Path(__file__).parents[2]
 SCRIPT = ROOT / ".github" / "scripts" / "resolve-provider-release.py"
+LATEST_SCRIPT = ROOT / ".github" / "scripts" / "select-latest-provider-release.py"
 
 
 def _load_module():
     spec = importlib.util.spec_from_file_location("resolve_provider_release", SCRIPT)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_latest_module():
+    spec = importlib.util.spec_from_file_location("select_latest_provider_release", LATEST_SCRIPT)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -34,20 +44,33 @@ def test_tag_release_maps_getcomics_to_both_registry_names() -> None:
     assert release.dockerhub_image == "docker.io/pullbox/pullbox-provider-getcomics"
 
 
-def test_tag_release_preserves_provider_specific_prerelease(tmp_path: Path) -> None:
+def test_tag_release_uses_canonical_provider_prerelease(tmp_path: Path) -> None:
     pyproject = tmp_path / "providers" / "annas_archive" / "pyproject.toml"
     pyproject.parent.mkdir(parents=True)
-    pyproject.write_text('[project]\nversion = "1.2.3-rc1"\n', encoding="utf-8")
+    pyproject.write_text('[project]\nversion = "1.2.3rc1"\n', encoding="utf-8")
 
     release = _load_module().resolve_release(
         repository_owner="pullboxapp",
-        tag="annas-archive-v1.2.3-rc1",
+        tag="annas-archive-v1.2.3rc1",
         repository_root=tmp_path,
     )
 
     assert release.provider == "annas-archive"
-    assert release.version == "1.2.3-rc1"
+    assert release.version == "1.2.3rc1"
     assert release.is_prerelease is True
+
+
+def test_noncanonical_provider_prerelease_tag_is_rejected(tmp_path: Path) -> None:
+    pyproject = tmp_path / "providers" / "annas_archive" / "pyproject.toml"
+    pyproject.parent.mkdir(parents=True)
+    pyproject.write_text('[project]\nversion = "1.2.3rc1"\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="provider release tag"):
+        _load_module().resolve_release(
+            repository_owner="pullboxapp",
+            tag="annas-archive-v1.2.3-rc1",
+            repository_root=tmp_path,
+        )
 
 
 def test_manual_release_uses_edge_without_creating_a_github_release() -> None:
@@ -108,3 +131,31 @@ def test_release_tag_must_match_the_selected_provider_package_version(tmp_path: 
             tag="getcomics-v1.0.0",
             repository_root=tmp_path,
         )
+
+
+def test_latest_release_selection_uses_highest_published_stable_version() -> None:
+    releases = [
+        {"tagName": "getcomics-v1.2.0", "isDraft": False, "isPrerelease": False},
+        {"tagName": "getcomics-v1.10.0", "isDraft": False, "isPrerelease": False},
+        {"tagName": "getcomics-v2.0.0rc1", "isDraft": False, "isPrerelease": True},
+        {"tagName": "getcomics-v3.0.0", "isDraft": True, "isPrerelease": False},
+        {"tagName": "annas-archive-v9.0.0", "isDraft": False, "isPrerelease": False},
+    ]
+
+    selected = _load_latest_module().select_latest_release(releases, provider="getcomics")
+
+    assert selected == ("getcomics-v1.10.0", "1.10.0")
+
+
+def test_latest_release_selection_returns_none_without_a_stable_release() -> None:
+    releases = [
+        {"tagName": "annas-archive-v1.0.0rc1", "isDraft": False, "isPrerelease": True},
+        {"tagName": "annas-archive-v1.0.0", "isDraft": True, "isPrerelease": False},
+    ]
+
+    selected = _load_latest_module().select_latest_release(
+        releases,
+        provider="annas-archive",
+    )
+
+    assert selected is None

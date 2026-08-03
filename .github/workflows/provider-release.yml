@@ -1,7 +1,7 @@
 ---
 # Publishes one independently versioned provider image to GHCR and Docker Hub.
-# Platform blobs are pushed by digest first; runnable tags are created only
-# after the AMD64 candidate passes the reviewed Grype baseline and API smoke.
+# Platform blobs and an internal candidate index are published first; runnable
+# tags are created only after validation, signing, and signature verification.
 
 name: Provider Image Release
 
@@ -24,10 +24,6 @@ on:
 
 permissions:
   contents: read
-
-concurrency:
-  group: provider-image-release-${{ github.ref || github.run_id }}
-  cancel-in-progress: false
 
 jobs:
   prepare:
@@ -90,7 +86,6 @@ jobs:
             ${{ steps.release.outputs.dockerhub-image }}
           tags: |
             type=raw,value=${{ steps.release.outputs.version }}
-            type=raw,value=latest,enable=${{ steps.release.outputs.is-release == 'true' && steps.release.outputs.is-prerelease != 'true' }}
             type=sha,format=short,prefix=sha-
           labels: |
             org.opencontainers.image.title=${{ steps.release.outputs.title }}
@@ -409,7 +404,7 @@ jobs:
           docker image rm "${LOCAL_IMAGE}" || true
 
   publish:
-    name: Publish Multi-Arch Provider Image
+    name: Publish Candidate Provider Image
     runs-on: ubuntu-latest
     needs: [prepare, build-amd64, build-arm64, validate-amd64]
     timeout-minutes: 20
@@ -445,7 +440,7 @@ jobs:
       - name: Publish GHCR multi-platform manifest
         env:
           IMAGE: ${{ needs.prepare.outputs.ghcr-image }}
-          TAGS: ${{ needs.prepare.outputs.image-tags }}
+          CANDIDATE_TAG: candidate-${{ github.run_id }}-${{ github.run_attempt }}
           DESCRIPTION: ${{ needs.prepare.outputs.description }}
           TITLE: ${{ needs.prepare.outputs.title }}
           VERSION: ${{ needs.prepare.outputs.version }}
@@ -460,30 +455,19 @@ jobs:
             exit 1
           fi
 
-          tag_args=()
-          while IFS= read -r tag; do
-            if [[ "${tag}" == "${IMAGE}:"* ]]; then
-              tag_args+=(--tag "${tag}")
-            fi
-          done <<< "${TAGS}"
-          if [ "${#tag_args[@]}" -eq 0 ]; then
-            echo "::error::No GHCR tags were generated."
-            exit 1
-          fi
-
           docker buildx imagetools create \
             --annotation "index:org.opencontainers.image.title=${TITLE}" \
             --annotation "index:org.opencontainers.image.description=${DESCRIPTION}" \
             --annotation "index:org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
             --annotation "index:org.opencontainers.image.licenses=GPL-3.0-or-later" \
             --annotation "index:org.opencontainers.image.version=${VERSION}" \
-            "${tag_args[@]}" \
+            --tag "${IMAGE}:${CANDIDATE_TAG}" \
             "${sources[@]}"
 
       - name: Publish Docker Hub multi-platform manifest
         env:
           IMAGE: ${{ needs.prepare.outputs.dockerhub-image }}
-          TAGS: ${{ needs.prepare.outputs.image-tags }}
+          CANDIDATE_TAG: candidate-${{ github.run_id }}-${{ github.run_attempt }}
           DESCRIPTION: ${{ needs.prepare.outputs.description }}
           TITLE: ${{ needs.prepare.outputs.title }}
           VERSION: ${{ needs.prepare.outputs.version }}
@@ -494,24 +478,13 @@ jobs:
             sources+=("${IMAGE}@sha256:${digest_file}")
           done
 
-          tag_args=()
-          while IFS= read -r tag; do
-            if [[ "${tag}" == "${IMAGE}:"* ]]; then
-              tag_args+=(--tag "${tag}")
-            fi
-          done <<< "${TAGS}"
-          if [ "${#tag_args[@]}" -eq 0 ]; then
-            echo "::error::No Docker Hub tags were generated."
-            exit 1
-          fi
-
           docker buildx imagetools create \
             --annotation "index:org.opencontainers.image.title=${TITLE}" \
             --annotation "index:org.opencontainers.image.description=${DESCRIPTION}" \
             --annotation "index:org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
             --annotation "index:org.opencontainers.image.licenses=GPL-3.0-or-later" \
             --annotation "index:org.opencontainers.image.version=${VERSION}" \
-            "${tag_args[@]}" \
+            --tag "${IMAGE}:${CANDIDATE_TAG}" \
             "${sources[@]}"
 
       - name: Verify both registries expose the same immutable digest
@@ -519,13 +492,13 @@ jobs:
         env:
           GHCR_IMAGE: ${{ needs.prepare.outputs.ghcr-image }}
           DOCKERHUB_IMAGE: ${{ needs.prepare.outputs.dockerhub-image }}
-          VERSION: ${{ needs.prepare.outputs.version }}
+          CANDIDATE_TAG: candidate-${{ github.run_id }}-${{ github.run_attempt }}
           DESCRIPTION: ${{ needs.prepare.outputs.description }}
         run: |
-          docker buildx imagetools inspect "${GHCR_IMAGE}:${VERSION}" --raw > ghcr-index.json
-          docker buildx imagetools inspect "${DOCKERHUB_IMAGE}:${VERSION}" --raw > dockerhub-index.json
-          GHCR_DIGEST=$(docker buildx imagetools inspect "${GHCR_IMAGE}:${VERSION}" --format '{{json .Manifest.Digest}}' | tr -d '"')
-          DOCKERHUB_DIGEST=$(docker buildx imagetools inspect "${DOCKERHUB_IMAGE}:${VERSION}" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          docker buildx imagetools inspect "${GHCR_IMAGE}:${CANDIDATE_TAG}" --raw > ghcr-index.json
+          docker buildx imagetools inspect "${DOCKERHUB_IMAGE}:${CANDIDATE_TAG}" --raw > dockerhub-index.json
+          GHCR_DIGEST=$(docker buildx imagetools inspect "${GHCR_IMAGE}:${CANDIDATE_TAG}" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          DOCKERHUB_DIGEST=$(docker buildx imagetools inspect "${DOCKERHUB_IMAGE}:${CANDIDATE_TAG}" --format '{{json .Manifest.Digest}}' | tr -d '"')
 
           if ! [[ "${GHCR_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "::error::Unexpected GHCR digest: ${GHCR_DIGEST}"
@@ -623,6 +596,78 @@ jobs:
             --certificate-identity "${CERTIFICATE_IDENTITY}" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             "${DOCKERHUB_IMAGE}@${DIGEST}"
+
+  promote:
+    name: Promote Signed Provider Image
+    runs-on: ubuntu-latest
+    needs: [prepare, publish, sign]
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Promote signed digest to runnable tags
+        env:
+          DIGEST: ${{ needs.publish.outputs.image-digest }}
+          GHCR_IMAGE: ${{ needs.prepare.outputs.ghcr-image }}
+          DOCKERHUB_IMAGE: ${{ needs.prepare.outputs.dockerhub-image }}
+          TAGS: ${{ needs.prepare.outputs.image-tags }}
+        run: |
+          if ! [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Unexpected signed multi-platform digest: ${DIGEST}"
+            exit 1
+          fi
+
+          promote_registry() {
+            local image="$1"
+            local tag
+            local resolved_digest
+            local -a tag_args=()
+            local -a promoted_tags=()
+
+            while IFS= read -r tag; do
+              if [[ "${tag}" == "${image}:"* ]]; then
+                tag_args+=(--tag "${tag}")
+                promoted_tags+=("${tag}")
+              fi
+            done <<< "${TAGS}"
+            if [ "${#tag_args[@]}" -eq 0 ]; then
+              echo "::error::No promotion tags were generated for ${image}."
+              exit 1
+            fi
+
+            docker buildx imagetools create \
+              "${tag_args[@]}" \
+              "${image}@${DIGEST}"
+
+            for tag in "${promoted_tags[@]}"; do
+              resolved_digest=$(docker buildx imagetools inspect "${tag}" \
+                --format '{{json .Manifest.Digest}}' | tr -d '"')
+              if [ "${resolved_digest}" != "${DIGEST}" ]; then
+                echo "::error::Promoted tag ${tag} resolved to ${resolved_digest}, expected ${DIGEST}."
+                exit 1
+              fi
+            done
+          }
+
+          promote_registry "${GHCR_IMAGE}"
+          promote_registry "${DOCKERHUB_IMAGE}"
 
       - name: Write provider release metadata
         env:
