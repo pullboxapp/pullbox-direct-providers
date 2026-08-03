@@ -9,13 +9,16 @@ import tomllib
 from pathlib import Path
 from typing import NamedTuple
 
-SEMVER = re.compile(
+RELEASE_VERSION = re.compile(
     r"(?:0|[1-9][0-9]*)\."
     r"(?:0|[1-9][0-9]*)\."
     r"(?:0|[1-9][0-9]*)"
-    r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+    r"(?:(?:a|b|rc)(?:0|[1-9][0-9]*))?"
 )
-TAG = re.compile(rf"(?P<provider>getcomics|annas-archive|synthetic)-v(?P<version>{SEMVER.pattern})")
+TAG = re.compile(
+    rf"(?P<provider>getcomics|annas-archive|synthetic)-v"
+    rf"(?P<version>{RELEASE_VERSION.pattern})"
+)
 OWNER = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?")
 
 
@@ -84,7 +87,7 @@ def resolve_release(
         match = TAG.fullmatch(tag)
         if match is None:
             raise ValueError(
-                "Invalid provider release tag; expected <provider>-v<major>.<minor>.<patch>"
+                "Invalid provider release tag; expected a canonical provider package version"
             )
         provider = match.group("provider")
         version = match.group("version")
@@ -114,7 +117,7 @@ def resolve_release(
         version=version,
         release_tag=release_tag,
         is_release=is_release,
-        is_prerelease=is_release and "-" in version,
+        is_prerelease=is_release and re.search(r"(?:a|b|rc)[0-9]+$", version) is not None,
     )
 
 

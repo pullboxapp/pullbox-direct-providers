@@ -31,10 +31,11 @@ The protected tag ruleset must cover:
 
 Pre-create the public `pullbox-provider-getcomics` and
 `pullbox-provider-annas-archive` Docker Hub repositories with their expected
-descriptions and overviews. Configure numbered semantic versions and `sha-*`
-tags as immutable while allowing `latest` and manual `edge` rehearsal tags to
-advance. Docker Hub Scout coverage is optional; the blocking release security
-gate is the reviewed Grype scan that runs before runnable tags are created.
+descriptions and overviews. Configure numbered stable and canonical Python
+prerelease versions plus `sha-*` tags as immutable while allowing `latest`,
+internal `candidate-*`, and manual `edge` rehearsal tags to advance. Docker Hub
+Scout coverage is optional; the blocking release security gate is the reviewed
+Grype scan that runs before runnable tags are created.
 
 ## Release Preparation
 
@@ -53,7 +54,7 @@ gate is the reviewed Grype scan that runs before runnable tags are created.
    clean. The workflow independently rejects any release tag whose commit is
    not already merged into `main`.
 
-Provider tags use strict semantic versions:
+Stable provider tags use strict semantic versions:
 
 ```text
 getcomics-v1.0.0
@@ -61,9 +62,11 @@ annas-archive-v1.0.0
 synthetic-v1.0.0
 ```
 
-Prereleases use the normal SemVer suffix, for example
-`getcomics-v1.1.0-rc1`. The abbreviated form `v1.0` is not accepted because it
-is not a complete semantic version.
+Prereleases use the canonical Python package form exposed by the running
+provider, for example `getcomics-v1.1.0rc1`. Hyphenated forms such as
+`getcomics-v1.1.0-rc1` and abbreviated forms such as `v1.0` are not accepted.
+This keeps the Git tag, image tag, OCI version, package metadata, and provider
+manifest version identical.
 
 ## Create A Release
 
@@ -90,11 +93,13 @@ The `Provider Image Release` workflow then:
 4. Runs the candidate with a read-only root, no capabilities, and
    `no-new-privileges`, then verifies authenticated manifest/health responses
    and rejection of unauthenticated requests.
-5. Creates runnable version, SHA, and eligible stable `latest` manifests only
-   after validation succeeds.
-6. Confirms both registries expose the same digest, both runnable platforms,
+5. Creates an internal `candidate-*` multi-platform manifest in each registry
+   and confirms both registries expose the same digest, both runnable platforms,
    OCI descriptions, SBOM, and provenance.
-7. Signs and verifies both registry digests with Cosign.
+6. Signs and verifies both candidate registry digests with Cosign.
+7. Promotes the verified digest to runnable version, SHA, manual `edge`, and
+   eligible stable `latest` tags, then verifies every tag resolves to the signed
+   digest.
 8. Uploads trusted release metadata for the downstream `Release` workflow.
 
 The downstream workflow revalidates tag ownership and both signatures before
@@ -121,11 +126,12 @@ Do not describe an image as signed or released until all of these checks pass.
 
 ## Failure And Rollback
 
-A failure before manifest publication leaves no runnable version tag. A failure
-after publication but before signing or GitHub Release creation is an incomplete
-release: investigate it, remove or quarantine the affected mutable tags where
-possible, and use a new patch version after correction. Do not move or recreate
-an immutable numbered tag.
+A failure before signed-digest promotion leaves no runnable version, SHA, or
+`latest` tag. The internal `candidate-*` reference may remain for diagnosis but
+is not a supported user pull target. A failure after signed promotion but before
+GitHub Release creation leaves a signed, verified image without its release
+page; investigate and rerun the downstream release workflow without moving or
+recreating the immutable numbered tag.
 
 Provider rollback is independent from Pullbox. Pin the prior numbered provider
 tag or digest, recreate only that provider container, verify health and protocol

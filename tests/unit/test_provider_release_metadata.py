@@ -34,20 +34,33 @@ def test_tag_release_maps_getcomics_to_both_registry_names() -> None:
     assert release.dockerhub_image == "docker.io/pullbox/pullbox-provider-getcomics"
 
 
-def test_tag_release_preserves_provider_specific_prerelease(tmp_path: Path) -> None:
+def test_tag_release_uses_canonical_provider_prerelease(tmp_path: Path) -> None:
     pyproject = tmp_path / "providers" / "annas_archive" / "pyproject.toml"
     pyproject.parent.mkdir(parents=True)
-    pyproject.write_text('[project]\nversion = "1.2.3-rc1"\n', encoding="utf-8")
+    pyproject.write_text('[project]\nversion = "1.2.3rc1"\n', encoding="utf-8")
 
     release = _load_module().resolve_release(
         repository_owner="pullboxapp",
-        tag="annas-archive-v1.2.3-rc1",
+        tag="annas-archive-v1.2.3rc1",
         repository_root=tmp_path,
     )
 
     assert release.provider == "annas-archive"
-    assert release.version == "1.2.3-rc1"
+    assert release.version == "1.2.3rc1"
     assert release.is_prerelease is True
+
+
+def test_noncanonical_provider_prerelease_tag_is_rejected(tmp_path: Path) -> None:
+    pyproject = tmp_path / "providers" / "annas_archive" / "pyproject.toml"
+    pyproject.parent.mkdir(parents=True)
+    pyproject.write_text('[project]\nversion = "1.2.3rc1"\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="provider release tag"):
+        _load_module().resolve_release(
+            repository_owner="pullboxapp",
+            tag="annas-archive-v1.2.3-rc1",
+            repository_root=tmp_path,
+        )
 
 
 def test_manual_release_uses_edge_without_creating_a_github_release() -> None:

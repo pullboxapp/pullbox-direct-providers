@@ -185,6 +185,11 @@ def test_provider_release_is_tag_or_manual_only() -> None:
     assert "tag_override" not in triggers["workflow_dispatch"]["inputs"]
     assert workflow["permissions"] == {"contents": "read"}
     assert workflow["concurrency"]["cancel-in-progress"] is False
+    concurrency_group = workflow["concurrency"]["group"]
+    assert "github.ref || github.run_id" not in concurrency_group
+    assert "github.event.inputs.provider" in concurrency_group
+    for provider in ("getcomics", "annas-archive", "synthetic"):
+        assert provider in concurrency_group
     assert "pull_request" not in triggers
     assert "pull_request_target" not in text
 
@@ -228,6 +233,7 @@ def test_provider_release_validates_before_tagging_and_preserves_supply_chain_da
         "validate-amd64",
         "publish",
         "sign",
+        "promote",
     }
     assert expected_jobs <= set(jobs)
     assert set(jobs["publish"]["needs"]) == {
@@ -244,6 +250,15 @@ def test_provider_release_validates_before_tagging_and_preserves_supply_chain_da
     assert "org.opencontainers.image.description" in text
     assert "same immutable digest" in text
 
+    publish_text = yaml.safe_dump(jobs["publish"])
+    sign_text = yaml.safe_dump(jobs["sign"])
+    promote_text = yaml.safe_dump(jobs["promote"])
+    assert "candidate-${{ github.run_id }}-${{ github.run_attempt }}" in publish_text
+    assert "image-tags" not in publish_text
+    assert "image-tags" not in sign_text
+    assert "image-tags" in promote_text
+    assert jobs["promote"]["needs"] == ["prepare", "publish", "sign"]
+
 
 def test_provider_release_signs_and_verifies_both_registry_digests() -> None:
     workflow = _load_yaml(PROVIDER_RELEASE_WORKFLOW)
@@ -255,6 +270,8 @@ def test_provider_release_signs_and_verifies_both_registry_digests() -> None:
     assert text.count("cosign sign --yes") >= 2
     assert text.count("cosign verify") >= 2
     assert jobs["sign"]["needs"] == ["prepare", "publish"]
+    assert "provider-release-metadata" not in yaml.safe_dump(jobs["sign"])
+    assert "provider-release-metadata" in yaml.safe_dump(jobs["promote"])
 
 
 def test_github_release_requires_a_successful_tagged_provider_release() -> None:
