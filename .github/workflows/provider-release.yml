@@ -588,14 +588,40 @@ jobs:
           DOCKERHUB_IMAGE: ${{ needs.prepare.outputs.dockerhub-image }}
           CERTIFICATE_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/provider-release.yml@${{ github.ref }}
         run: |
-          cosign verify \
-            --certificate-identity "${CERTIFICATE_IDENTITY}" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-            "${GHCR_IMAGE}@${DIGEST}"
-          cosign verify \
-            --certificate-identity "${CERTIFICATE_IDENTITY}" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-            "${DOCKERHUB_IMAGE}@${DIGEST}"
+          verify_signature_with_retry() {
+            local image="$1"
+            local max_attempts="12"
+            local retry_delay_seconds="5"
+            local attempt
+            local output
+
+            for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+              if output=$(cosign verify \
+                --certificate-identity "${CERTIFICATE_IDENTITY}" \
+                --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+                "${image}@${DIGEST}" 2>&1); then
+                printf '%s\n' "${output}"
+                return 0
+              fi
+              printf '%s\n' "${output}" >&2
+
+              if [[ "${output}" != *"no signatures found"* ]]; then
+                echo "::error::Signature verification failed for ${image}@${DIGEST}."
+                return 1
+              fi
+
+              if [ "${attempt}" -eq "${max_attempts}" ]; then
+                echo "::error::Signature for ${image}@${DIGEST} was not visible after ${max_attempts} attempts."
+                return 1
+              fi
+
+              echo "::notice::Signature for ${image}@${DIGEST} is not visible yet; retrying in ${retry_delay_seconds}s."
+              sleep "${retry_delay_seconds}"
+            done
+          }
+
+          verify_signature_with_retry "${GHCR_IMAGE}"
+          verify_signature_with_retry "${DOCKERHUB_IMAGE}"
 
   promote:
     name: Promote Signed Provider Image

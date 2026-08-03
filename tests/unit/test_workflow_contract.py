@@ -265,11 +265,22 @@ def test_provider_release_signs_and_verifies_both_registry_digests() -> None:
     workflow = _load_yaml(PROVIDER_RELEASE_WORKFLOW)
     jobs = workflow["jobs"]
     text = PROVIDER_RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    verify_step = next(
+        step
+        for step in jobs["sign"]["steps"]
+        if step.get("name") == "Verify both registry signatures"
+    )
+    verify_script = verify_step["run"]
 
     assert "id-token: write" in text
     assert "packages: write" in text
     assert text.count("cosign sign --yes") >= 2
-    assert text.count("cosign verify") >= 2
+    assert "cosign verify" in verify_script
+    assert "verify_signature_with_retry()" in verify_script
+    assert 'local max_attempts="12"' in verify_script
+    assert 'local retry_delay_seconds="5"' in verify_script
+    assert "no signatures found" in verify_script
+    assert verify_script.count("verify_signature_with_retry") == 3
     assert jobs["sign"]["needs"] == ["prepare", "publish"]
     assert "provider-release-metadata" not in yaml.safe_dump(jobs["sign"])
     assert "provider-release-metadata" in yaml.safe_dump(jobs["promote"])
