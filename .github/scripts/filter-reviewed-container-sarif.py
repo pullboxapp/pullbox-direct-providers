@@ -117,24 +117,18 @@ def _omission_evidence(
     return nonblocking_rule_ids, reviewed_severities
 
 
-def _severity_from_security_score(value: object) -> str | None:
-    if not isinstance(value, (str, int, float)):
+def _severity_from_grype_rule(rule: dict[str, Any]) -> str | None:
+    short_description = rule.get("shortDescription")
+    text = short_description.get("text") if isinstance(short_description, dict) else None
+    if not isinstance(text, str):
         return None
-    try:
-        score = float(value)
-    except ValueError:
-        return None
-    if not 0 <= score <= 10:
-        return None
-    if score >= 9:
-        return "Critical"
-    if score >= 7:
-        return "High"
-    if score >= 4:
-        return "Medium"
-    if score > 0:
-        return "Low"
-    return "Negligible"
+    normalized = f" {text.casefold()} "
+    matches = [
+        severity
+        for severity in KNOWN_SEVERITIES
+        if f" {severity.casefold()} vulnerability " in normalized
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _sarif_rule_severities(run: dict[str, Any]) -> dict[str, str | None]:
@@ -151,11 +145,7 @@ def _sarif_rule_severities(run: dict[str, Any]) -> dict[str, str | None]:
         rule_id = rule.get("id")
         if not isinstance(rule_id, str) or not rule_id:
             raise ValueError("SARIF rule is missing its id")
-        properties = rule.get("properties")
-        security_score = (
-            properties.get("security-severity") if isinstance(properties, dict) else None
-        )
-        severities[rule_id] = _severity_from_security_score(security_score)
+        severities[rule_id] = _severity_from_grype_rule(rule)
     return severities
 
 
