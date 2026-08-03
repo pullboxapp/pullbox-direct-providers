@@ -101,6 +101,7 @@ async def test_anna_manifest_marks_member_key_secret_and_official_urls_editable(
     assert response.status_code == 200
     payload = response.json()
     assert payload["provider_id"] == "pullbox.annas_archive"
+    assert payload["provider_version"] == "1.0.0"
     assert payload["source_domains"] == [
         "annas-archive.gl",
         "annas-archive.pk",

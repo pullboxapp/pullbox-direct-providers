@@ -90,6 +90,7 @@ async def test_getcomics_manifest_declares_narrow_stateless_capabilities() -> No
     assert response.status_code == 200
     payload = response.json()
     assert payload["provider_id"] == "pullbox.getcomics"
+    assert payload["provider_version"] == "1.0.0"
     assert payload["source_domains"] == ["getcomics.org"]
     assert payload["artifact_host_patterns"] == [
         "generic_https",

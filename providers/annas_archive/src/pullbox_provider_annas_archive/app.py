@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from importlib.metadata import PackageNotFoundError, version
 
 from fastapi import Depends, FastAPI
 from pullbox_provider_contract.api import (
@@ -35,7 +36,15 @@ from pullbox_provider_annas_archive.service import (
     AnnasArchiveProviderService,
 )
 
-_VERSION = "0.1.0.dev0"
+
+def _provider_version() -> str:
+    try:
+        return version("pullbox-provider-annas-archive")
+    except PackageNotFoundError:
+        return version("pullbox-direct-providers")
+
+
+_VERSION = _provider_version()
 
 
 def create_app(

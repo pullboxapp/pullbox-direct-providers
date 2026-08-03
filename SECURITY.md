@@ -43,3 +43,17 @@ fail CI, full reports remain available as CI artifacts, and every accepted
 entry requires a rationale and expiry date. Only unreviewed High or Critical
 findings are uploaded to the actionable GitHub code-scanning dashboard. Base
 image and dependency updates should remove entries as fixes become available.
+
+## Release Integrity
+
+Only provider-prefixed semantic-version tags can publish production images.
+The release workflow builds Linux AMD64 and ARM64 images by immutable digest,
+checks the reviewed vulnerability baseline, smoke-tests the hardened candidate,
+and only then creates runnable tags in GHCR and Docker Hub. Both registries must
+resolve to the same digest before the image is signed.
+
+Every release image includes SBOM and provenance attestations and is signed in
+both registries with keyless Sigstore/Cosign through GitHub Actions OIDC. The
+GitHub Release is created only after both signatures are verified. Operators
+should pin a numbered version or digest and use the verification commands in
+the corresponding GitHub Release notes.
