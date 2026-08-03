@@ -97,8 +97,9 @@ The `Provider Image Release` workflow then:
    and confirms both registries expose the same digest, both runnable platforms,
    OCI descriptions, SBOM, and provenance.
 6. Signs and verifies both candidate registry digests with Cosign.
-7. Promotes the verified digest to runnable version, SHA, and manual `edge`
-   tags, then verifies every tag resolves to the signed digest.
+7. Promotes the verified digest to runnable version tags, adds an immutable SHA
+   tag for numbered releases or the mutable `edge` tag for manual rehearsals,
+   then verifies every tag resolves to the signed digest.
 8. Uploads trusted release metadata for the downstream `Release` workflow.
 
 The downstream workflow revalidates tag ownership and both signatures before
