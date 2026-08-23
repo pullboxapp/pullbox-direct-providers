@@ -57,20 +57,48 @@ class GetComicsProviderService:
         candidates: list[Candidate] = []
         seen_candidate_ids: set[str] = set()
         for query in _build_queries(intent):
-            url = f"{_BASE_URL}/?{urlencode({'s': query})}"
-            html = await self._page_fetcher(
-                url,
-                declared_domains=(_DOMAIN,),
+            await self._append_search_candidates(
+                query,
+                candidates=candidates,
+                seen_candidate_ids=seen_candidate_ids,
                 resolver_profile=resolver_profile,
             )
-            for candidate in parse_search_html(html, source_domain=_DOMAIN):
-                if candidate.provider_candidate_id in seen_candidate_ids:
-                    continue
-                seen_candidate_ids.add(candidate.provider_candidate_id)
-                candidates.append(candidate)
-                if len(candidates) >= limit:
-                    return candidates
+            if len(candidates) >= limit:
+                return candidates[:limit]
+
+        fallback = _standard_issue_fallback_query(intent)
+        if (
+            fallback is not None
+            and len(candidates) < limit
+            and not _has_requested_issue_coverage(candidates, intent.issue_number)
+        ):
+            await self._append_search_candidates(
+                fallback,
+                candidates=candidates,
+                seen_candidate_ids=seen_candidate_ids,
+                resolver_profile=resolver_profile,
+            )
         return candidates
+
+    async def _append_search_candidates(
+        self,
+        query: str,
+        *,
+        candidates: list[Candidate],
+        seen_candidate_ids: set[str],
+        resolver_profile: ResolverProfile | None,
+    ) -> None:
+        url = f"{_BASE_URL}/?{urlencode({'s': query})}"
+        html = await self._page_fetcher(
+            url,
+            declared_domains=(_DOMAIN,),
+            resolver_profile=resolver_profile,
+        )
+        for candidate in parse_search_html(html, source_domain=_DOMAIN):
+            if candidate.provider_candidate_id in seen_candidate_ids:
+                continue
+            seen_candidate_ids.add(candidate.provider_candidate_id)
+            candidates.append(candidate)
 
     async def resolve(
         self,
@@ -170,6 +198,25 @@ def _build_queries(intent: SearchIntent) -> list[str]:
             if series_fallback not in queries:
                 queries.append(series_fallback)
     return queries[:5]
+
+
+def _standard_issue_fallback_query(intent: SearchIntent) -> str | None:
+    """Return one bounded range-pack fallback after an exact issue search misses."""
+    if is_collection_intent(intent.issue_type) or not intent.issue_number:
+        return None
+    parts = [intent.series_title]
+    if intent.year:
+        parts.append(str(intent.year))
+    return " ".join(parts)[:700]
+
+
+def _has_requested_issue_coverage(
+    candidates: list[Candidate],
+    issue_number: str | None,
+) -> bool:
+    return bool(issue_number) and any(
+        issue_number in candidate.parsed.issue_numbers for candidate in candidates
+    )
 
 
 def _candidate_url(candidate_id: str) -> str:

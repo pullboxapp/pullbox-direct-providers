@@ -206,12 +206,23 @@ async def test_collection_search_uses_explicit_volume_for_generic_issue_title() 
     assert any("Clean+Room%3A+Exile+Vol+2" in url for url in urls)
 
 
-async def test_service_does_not_broaden_empty_standard_issue_search() -> None:
+async def test_service_falls_back_to_series_year_for_standard_issue_in_contiguous_pack() -> None:
     urls: list[str] = []
 
     async def pages(url: str, **_kwargs: object) -> str:
         urls.append(url)
-        return '<html><body><h1 class="search-title">Search Result</h1></body></html>'
+        if "Example+Heroes+7+2026" in url:
+            return '<html><body><h1 class="search-title">Search Result</h1></body></html>'
+        return """
+        <html><body>
+          <h1 class="search-title">Search Result</h1>
+          <article><h1 class="post-title">
+            <a href="https://getcomics.org/dc/example-heroes-5-10-2026/">
+              Example Heroes #5-10 (2026)
+            </a>
+          </h1></article>
+        </body></html>
+        """
 
     service = GetComicsProviderService(page_fetcher=pages)
     intent = SearchIntent(
@@ -222,8 +233,14 @@ async def test_service_does_not_broaden_empty_standard_issue_search() -> None:
         year=2026,
     )
 
-    assert await service.search(intent, limit=10) == []
-    assert len(urls) == 1
+    candidates = await service.search(intent, limit=10)
+
+    assert [candidate.parsed.issue_numbers for candidate in candidates] == [
+        ["5", "6", "7", "8", "9", "10"]
+    ]
+    assert len(urls) == 2
+    assert "Example+Heroes+7+2026" in urls[0]
+    assert "Example+Heroes+2026" in urls[1]
 
 
 async def test_service_rejects_forged_candidate_identifier() -> None:
