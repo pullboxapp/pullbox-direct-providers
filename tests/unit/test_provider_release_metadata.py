@@ -31,12 +31,12 @@ def _load_latest_module():
 def test_tag_release_maps_getcomics_to_both_registry_names() -> None:
     release = _load_module().resolve_release(
         repository_owner="pullboxapp",
-        tag="getcomics-v1.0.1",
+        tag="getcomics-v1.0.2",
     )
 
     assert release.provider == "getcomics"
-    assert release.version == "1.0.1"
-    assert release.release_tag == "getcomics-v1.0.1"
+    assert release.version == "1.0.2"
+    assert release.release_tag == "getcomics-v1.0.2"
     assert release.is_release is True
     assert release.is_prerelease is False
     assert release.dockerfile == "docker/Dockerfile.getcomics"
