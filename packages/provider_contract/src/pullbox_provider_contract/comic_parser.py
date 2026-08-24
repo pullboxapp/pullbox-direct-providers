@@ -68,7 +68,7 @@ def parse_comic_title(raw_title: str) -> ComicTitleEvidence:
         release_group = scene_match.group("group")
         series = scene_match.group("group_series") or scene_match.group("series")
         working = _SPACE.sub(" ", re.sub(r"[._]+", " ", series)).strip()
-        issue_numbers = (_normalize_issue(scene_match.group("issue")),)
+        issue_numbers = (normalize_issue(scene_match.group("issue")),)
 
     range_match = _HASH_RANGE.search(working)
     if range_match:
@@ -83,7 +83,7 @@ def parse_comic_title(raw_title: str) -> ComicTitleEvidence:
     if not issue_numbers:
         issue_match = _HASH_ISSUE.search(working) or _TRAILING_ISSUE.search(working)
         if issue_match:
-            issue_numbers = (_normalize_issue(issue_match.group("issue")),)
+            issue_numbers = (normalize_issue(issue_match.group("issue")),)
             working = working[: issue_match.start()].strip()
 
     series_title = working.strip(" -\u2013:()")
@@ -97,7 +97,7 @@ def parse_comic_title(raw_title: str) -> ComicTitleEvidence:
     )
 
 
-def _normalize_issue(value: str) -> str:
+def normalize_issue(value: str) -> str:
     numeric = value.rstrip("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
     suffix = value[len(numeric) :].casefold()
     if "." in numeric:

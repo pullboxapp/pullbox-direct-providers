@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 from urllib.parse import urlencode
 
+from pullbox_provider_contract.comic_parser import normalize_issue
 from pullbox_provider_contract.errors import ProtocolError
 from pullbox_provider_contract.models import Artifact, Candidate, SearchIntent
 from pullbox_provider_contract.search_terms import (
@@ -236,7 +237,9 @@ def _has_requested_issue_coverage(
 
 def _candidate_covers_intent(candidate: Candidate, intent: SearchIntent) -> bool:
     """Return whether a candidate covers this issue for the requested series."""
-    if intent.issue_number not in candidate.parsed.issue_numbers:
+    if intent.issue_number is None:
+        return False
+    if normalize_issue(intent.issue_number) not in candidate.parsed.issue_numbers:
         return False
     if _normalized_series_title(candidate.parsed.series_title) not in _intent_series_titles(intent):
         return False
