@@ -178,6 +178,104 @@ components:
           type: boolean
         configuration_schema:
           type: boolean
+    ProviderConfigurationSchema:
+      type: object
+      additionalProperties: false
+      required: [type, properties, additionalProperties]
+      description: >-
+        Closed provider-declared schema for Pullbox-owned native controls. Runtime
+        validation enforces required-name membership and all cross-field constraints.
+      properties:
+        type:
+          const: object
+        title:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        description:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        properties:
+          type: object
+          maxProperties: 50
+          propertyNames:
+            pattern: "^[a-z][a-z0-9_]{0,63}$"
+          additionalProperties:
+            $ref: "#/components/schemas/ProviderConfigurationField"
+        required:
+          type: array
+          maxItems: 50
+          uniqueItems: true
+          items:
+            type: string
+            pattern: "^[a-z][a-z0-9_]{0,63}$"
+        additionalProperties:
+          const: false
+    ProviderConfigurationField:
+      type: object
+      additionalProperties: false
+      required: [type]
+      description: >-
+        One native Pullbox configuration control. Runtime validation enforces that
+        defaults, choices, formats, bounds, secrets, suggestions, and source-origin
+        markers are compatible with the declared control type.
+      properties:
+        type:
+          type: string
+          enum: [string, boolean, integer, number]
+        title:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        description:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        default:
+          type: [string, boolean, number]
+          description: Must match the declared control type and any closed choices.
+        enum:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          description: Closed choices; configured values must be members of this list.
+          items:
+            type: [string, boolean, number]
+        format:
+          type: string
+          enum: [uri]
+        minimum:
+          type: number
+        maximum:
+          type: number
+        minLength:
+          type: integer
+          minimum: 0
+        maxLength:
+          type: integer
+          minimum: 0
+        x-pullbox-secret:
+          type: boolean
+          default: false
+        x-pullbox-placeholder:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        x-pullbox-suggestions:
+          type: array
+          minItems: 1
+          maxItems: 20
+          uniqueItems: true
+          description: Editable HTTPS origin suggestions; values outside the list remain valid.
+          items:
+            type: string
+            format: uri
+        x-pullbox-source-origin:
+          type: boolean
+          default: false
+          description: Marks an HTTPS origin field for provider-scoped link and resolver policy.
     ManifestResponse:
       type: object
       required:
@@ -228,7 +326,7 @@ components:
         capabilities:
           $ref: "#/components/schemas/ProviderCapabilities"
         configuration_schema:
-          type: object
+          $ref: "#/components/schemas/ProviderConfigurationSchema"
         min_pullbox_version:
           type: [string, "null"]
         max_pullbox_version:
@@ -432,6 +530,13 @@ components:
           type: number
           minimum: 0
           maximum: 1
+        content_fingerprint:
+          type: [string, "null"]
+          pattern: "^md5:[0-9a-f]{32}$"
+          description: >-
+            Optional stable provider-neutral identity for byte-identical content, using
+            canonical lowercase MD5 hexadecimal. Changed bytes require a new value. Used
+            only for deduplication and fallback grouping, never as a security checksum.
         provenance:
           type: object
         can_resolve:

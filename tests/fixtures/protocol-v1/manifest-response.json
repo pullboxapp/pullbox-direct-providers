@@ -26,7 +26,18 @@
   },
   "configuration_schema": {
     "type": "object",
-    "properties": {},
+    "properties": {
+      "source_url": {
+        "type": "string",
+        "title": "Source URL",
+        "format": "uri",
+        "default": "https://provider.test",
+        "x-pullbox-suggestions": [
+          "https://provider.test"
+        ],
+        "x-pullbox-source-origin": true
+      }
+    },
     "additionalProperties": false
   },
   "min_pullbox_version": null,

@@ -22,6 +22,7 @@
         "quality": "digital"
       },
       "provider_confidence": 1.0,
+      "content_fingerprint": "md5:0123456789abcdef0123456789abcdef",
       "provenance": {
         "fixture": "deterministic"
       },

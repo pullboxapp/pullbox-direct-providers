@@ -40,7 +40,11 @@ def test_configuration_schema_accepts_native_allowlisted_controls() -> None:
                 "type": "string",
                 "title": "Source URL",
                 "format": "uri",
-                "enum": ["https://source-one.example", "https://source-two.example"],
+                "x-pullbox-suggestions": [
+                    "https://source-one.example",
+                    "https://source-two.example",
+                ],
+                "x-pullbox-source-origin": True,
                 "default": "https://source-one.example",
             },
         },
@@ -59,6 +63,180 @@ def test_configuration_schema_accepts_native_allowlisted_controls() -> None:
     )
     assert validated.properties["member_token"].secret is True
     assert validated.properties["source_url"].input_format == "uri"
+    assert validated.properties["source_url"].suggestions == (
+        "https://source-one.example",
+        "https://source-two.example",
+    )
+    assert validated.properties["source_url"].source_origin is True
+    assert validated.properties["source_url"].choices == ()
+
+
+def test_configuration_schema_keeps_uri_suggestions_open() -> None:
+    schema = validate_configuration_schema(
+        {
+            "type": "object",
+            "properties": {
+                "source_url": {
+                    "type": "string",
+                    "format": "uri",
+                    "default": "https://custom.example",
+                    "x-pullbox-suggestions": ["https://known.example"],
+                    "x-pullbox-source-origin": True,
+                }
+            },
+            "additionalProperties": False,
+        }
+    )
+
+    assert schema.properties["source_url"].default == "https://custom.example"
+
+
+def test_configuration_schema_keeps_suggestions_and_source_origin_independent() -> None:
+    schema = validate_configuration_schema(
+        {
+            "type": "object",
+            "properties": {
+                "suggested_url": {
+                    "type": "string",
+                    "format": "uri",
+                    "x-pullbox-suggestions": ["https://known.example"],
+                },
+                "custom_origin": {
+                    "type": "string",
+                    "format": "uri",
+                    "x-pullbox-source-origin": True,
+                },
+            },
+            "additionalProperties": False,
+        }
+    )
+
+    assert schema.properties["suggested_url"].suggestions == ("https://known.example",)
+    assert schema.properties["suggested_url"].source_origin is False
+    assert schema.properties["custom_origin"].suggestions == ()
+    assert schema.properties["custom_origin"].source_origin is True
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        {
+            "type": "boolean",
+            "x-pullbox-suggestions": ["https://source.example"],
+        },
+        {
+            "type": "string",
+            "x-pullbox-suggestions": ["https://source.example"],
+        },
+        {
+            "type": "string",
+            "format": "uri",
+            "x-pullbox-suggestions": ["http://source.example"],
+        },
+        {
+            "type": "string",
+            "format": "uri",
+            "x-pullbox-suggestions": ["https://source.example/path"],
+        },
+        {
+            "type": "string",
+            "format": "uri",
+            "x-pullbox-suggestions": ["https://127.0.0.1"],
+        },
+        {
+            "type": "string",
+            "format": "uri",
+            "x-pullbox-suggestions": ["https://localhost"],
+        },
+        {
+            "type": "string",
+            "format": "uri",
+            "x-pullbox-suggestions": ["https://2130706433"],
+        },
+        {
+            "type": "string",
+            "format": "uri",
+            "x-pullbox-suggestions": ["https://0x7f000001"],
+        },
+        {
+            "type": "string",
+            "format": "uri",
+            "x-pullbox-suggestions": ["https://source.local"],
+        },
+        {
+            "type": "string",
+            "format": "uri",
+            "x-pullbox-suggestions": ["https://source.onion"],
+        },
+        {
+            "type": "string",
+            "format": "uri",
+            "x-pullbox-suggestions": ["https://source.internal"],
+        },
+        {
+            "type": "string",
+            "format": "uri",
+            "x-pullbox-suggestions": ["https://source.home.arpa"],
+        },
+        {
+            "type": "string",
+            "format": "uri",
+            "x-pullbox-suggestions": ["https://source.example"] * 21,
+        },
+        {
+            "type": "string",
+            "format": "uri",
+            "x-pullbox-source-origin": "yes",
+        },
+        {
+            "type": "string",
+            "format": "uri",
+            "x-pullbox-secret": True,
+            "x-pullbox-source-origin": True,
+        },
+    ],
+)
+def test_configuration_schema_rejects_unsafe_source_origin_extensions(
+    field: dict[str, object],
+) -> None:
+    with pytest.raises(ConfigurationSchemaError):
+        validate_configuration_schema(
+            {
+                "type": "object",
+                "properties": {"source_url": field},
+                "additionalProperties": False,
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "default",
+    [
+        "http://source.example",
+        "https://127.0.0.1",
+        "https://2130706433",
+        "https://source.local",
+        "https://source.onion",
+        "https://source.internal",
+        "https://source.home.arpa",
+    ],
+)
+def test_configuration_schema_rejects_unsafe_source_origin_default(default: str) -> None:
+    with pytest.raises(ConfigurationSchemaError):
+        validate_configuration_schema(
+            {
+                "type": "object",
+                "properties": {
+                    "source_url": {
+                        "type": "string",
+                        "format": "uri",
+                        "default": default,
+                        "x-pullbox-source-origin": True,
+                    }
+                },
+                "additionalProperties": False,
+            }
+        )
 
 
 @pytest.mark.parametrize(

@@ -126,6 +126,29 @@ the allowlisted native control types in the contract. Pullbox validates those
 controls, renders its own settings UI, and rejects provider-supplied HTML,
 JavaScript, or unknown configuration fields.
 
+### Native Provider Configuration
+
+Provider settings use a closed, documented vocabulary:
+
+- `enum` declares closed choices. The configured value must be one of the
+  declared values.
+- `x-pullbox-suggestions` declares editable HTTPS origin suggestions. A user may
+  enter another safe public HTTPS origin because the list is not an allowlist.
+- `x-pullbox-source-origin` marks a field as the provider's effective source
+  origin for provider-scoped link and browser-resolver policy.
+
+Suggestions and source-origin marking are independent controls. A provider may
+offer editable suggestions without changing its source origin, or allow a custom
+source origin without supplying suggestions. Pullbox validates suggested and
+default origins before rendering or saving them and validates the selected
+origin again before use.
+
+Search candidates may include an optional content fingerprint formatted as
+`md5:<32 lowercase hexadecimal characters>`. It must remain stable only while
+the candidate bytes are identical; changed bytes require a new fingerprint.
+Pullbox uses it only for deduplication and fallback grouping, never as a security
+or authenticity checksum, and does not treat it as durable library metadata.
+
 ## Source Provider Behavior
 
 ### GetComics
@@ -141,8 +164,8 @@ after a recognized challenge. It never downloads or proxies artifact bytes.
 The Anna's Archive provider is an explicit opt-in integration. Its configurable
 official URL accepts only `https://annas-archive.gl`,
 `https://annas-archive.pk`, or `https://annas-archive.gd`. Pullbox renders the
-field as an editable URL input with those exact choices suggested; lookalike and
-arbitrary domains remain rejected. Unattended resolution requires the user's
+field as a closed selector with those exact choices; lookalike and arbitrary
+domains remain rejected. Unattended resolution requires the user's
 member fast-download secret; free slow-download automation, CAPTCHA bypass,
 unofficial domains, and payload proxying are not supported.
 
