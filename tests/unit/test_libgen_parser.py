@@ -36,12 +36,14 @@ def test_parse_search_html_extracts_issue_and_collection_evidence() -> None:
     assert issue.language == "English"
     assert issue.pages == 24
     assert issue.size_bytes == 18 * 1024 * 1024
+    assert issue.size_tolerance_bytes == 512 * 1024
     assert issue.extension == "cbz"
 
     assert collection.md5 == "fedcba9876543210fedcba9876543210"
     assert collection.display_title == "Clockwork Harbor Deluxe Collection Vol. 2"
     assert collection.raw_title == "Clockwork Harbor Deluxe Collection v02 (2025)"
     assert collection.size_bytes == round(1.5 * 1024**3)
+    assert collection.size_tolerance_bytes == round(0.05 * 1024**3)
     assert collection.extension == "pdf"
     assert collection.author is None
     assert collection.language is None

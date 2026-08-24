@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from decimal import ROUND_HALF_UP, Decimal
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, urljoin, urlsplit, urlunsplit
 
@@ -36,6 +37,7 @@ class DiscoveredRecord:
     language: str | None
     pages: int | None
     size_bytes: int | None
+    size_tolerance_bytes: int | None
     extension: str | None
 
 
@@ -176,6 +178,7 @@ def _parse_record(row: _Row, *, origin: str) -> DiscoveredRecord | None:
     if len(display_title) > _MAX_TITLE_CHARS or len(raw_title) > _MAX_TITLE_CHARS:
         return None
 
+    size_bytes, size_tolerance_bytes = _optional_size(size.text)
     return DiscoveredRecord(
         md5=md5,
         source_reference=source_reference,
@@ -189,7 +192,8 @@ def _parse_record(row: _Row, *, origin: str) -> DiscoveredRecord | None:
         year=_optional_year(year.text),
         language=_optional_text(language.text),
         pages=_optional_integer(pages.text),
-        size_bytes=_optional_size(size.text),
+        size_bytes=size_bytes,
+        size_tolerance_bytes=size_tolerance_bytes,
         extension=_optional_extension(extension.text),
     )
 
@@ -308,15 +312,24 @@ def _optional_year(value: str) -> int | None:
     return parsed
 
 
-def _optional_size(value: str) -> int | None:
+def _optional_size(value: str) -> tuple[int | None, int | None]:
     normalized = _normalize_text(value)
     if not normalized:
-        return None
+        return None, None
     match = _SIZE.fullmatch(normalized)
     if match is None:
         raise ValueError("source size is malformed")
     multiplier = {"kb": 1024, "mb": 1024**2, "gb": 1024**3}[match.group(2).casefold()]
-    return round(float(match.group(1)) * multiplier)
+    displayed = Decimal(match.group(1))
+    exponent = displayed.as_tuple().exponent
+    if not isinstance(exponent, int):
+        raise ValueError("source size is malformed")
+    rounding_increment = Decimal(1).scaleb(exponent)
+    size_bytes = int((displayed * multiplier).to_integral_value(rounding=ROUND_HALF_UP))
+    tolerance_bytes = int(
+        ((rounding_increment * multiplier) / 2).to_integral_value(rounding=ROUND_HALF_UP)
+    )
+    return size_bytes, tolerance_bytes
 
 
 def _optional_extension(value: str) -> str | None:

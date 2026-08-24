@@ -9,6 +9,7 @@ from pullbox_provider_libgen.metadata import (
     build_candidate,
     parse_edition_metadata,
     parse_file_metadata,
+    parse_file_metadata_by_md5,
 )
 from pullbox_provider_libgen.parser import parse_search_html
 
@@ -77,7 +78,7 @@ def test_sparse_file_metadata_remains_a_lower_confidence_candidate() -> None:
     ("old", "new", "message"),
     [
         ("0123456789abcdef0123456789abcdef", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "MD5"),
-        ('"18874368"', '"18874369"', "size"),
+        ('"18874368"', '"19922944"', "size"),
         ('"cbz"', '"pdf"', "extension"),
         ('"1201"', '"9999"', "file"),
     ],
@@ -126,6 +127,34 @@ def test_edition_metadata_uses_keyed_identity_and_validates_file_relation() -> N
 def test_metadata_rejects_missing_or_malformed_top_level_shapes(payload: str) -> None:
     with pytest.raises(LibGenMetadataError):
         parse_file_metadata(payload, expected=_records()[0])
+
+
+def test_resolve_can_rebuild_file_metadata_from_md5_without_search_cache() -> None:
+    metadata = parse_file_metadata_by_md5(
+        _fixture("file-v1.json"),
+        expected_md5="0123456789abcdef0123456789abcdef",
+    )
+
+    assert metadata.file_id == 1201
+    assert metadata.edition_id == 910
+    assert metadata.extension == "cbz"
+
+
+def test_file_metadata_accepts_live_empty_visible_and_yes_no_broken_flags() -> None:
+    payload = _fixture("file-v1.json").replace('"visible": "1"', '"visible": ""', 1)
+    payload = payload.replace('"broken": "0"', '"broken": "N"', 1)
+
+    metadata = parse_file_metadata(payload, expected=_records()[0])
+
+    assert metadata.file_id == 1201
+
+
+def test_file_metadata_accepts_exact_size_within_html_rounding_precision() -> None:
+    payload = _fixture("file-v1.json").replace('"18874368"', '"19074368"', 1)
+
+    metadata = parse_file_metadata(payload, expected=_records()[0])
+
+    assert metadata.size_bytes == 19_074_368
 
 
 async def test_metadata_enricher_fetches_keyed_records_once_then_uses_cache() -> None:

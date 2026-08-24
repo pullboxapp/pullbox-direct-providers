@@ -85,6 +85,7 @@ class LibGenMetadataEnricher:
                 str(discovered.file_id or ""),
                 str(discovered.edition_id or ""),
                 str(discovered.size_bytes or ""),
+                str(discovered.size_tolerance_bytes or ""),
                 discovered.extension or "",
             )
         )
@@ -127,9 +128,44 @@ class LibGenMetadataEnricher:
 
 
 def parse_file_metadata(payload: str | bytes, *, expected: DiscoveredRecord) -> FileMetadata:
+    return _parse_file_metadata(
+        payload,
+        expected_md5=expected.md5,
+        expected_file_id=expected.file_id,
+        expected_edition_id=expected.edition_id,
+        expected_size_bytes=expected.size_bytes,
+        expected_size_tolerance_bytes=expected.size_tolerance_bytes,
+        expected_extension=expected.extension,
+    )
+
+
+def parse_file_metadata_by_md5(payload: str | bytes, *, expected_md5: str) -> FileMetadata:
+    """Rebuild file metadata for stateless resolve after a provider restart."""
+    md5 = _required_md5(expected_md5)
+    return _parse_file_metadata(
+        payload,
+        expected_md5=md5,
+        expected_file_id=None,
+        expected_edition_id=None,
+        expected_size_bytes=None,
+        expected_size_tolerance_bytes=None,
+        expected_extension=None,
+    )
+
+
+def _parse_file_metadata(
+    payload: str | bytes,
+    *,
+    expected_md5: str,
+    expected_file_id: int | None,
+    expected_edition_id: int | None,
+    expected_size_bytes: int | None,
+    expected_size_tolerance_bytes: int | None,
+    expected_extension: str | None,
+) -> FileMetadata:
     records = _decode_keyed_object(payload)
-    if expected.file_id is not None:
-        key = str(expected.file_id)
+    if expected_file_id is not None:
+        key = str(expected_file_id)
         record = records.get(key)
         if not isinstance(record, Mapping):
             raise LibGenMetadataError("LibGen file identity conflicts with discovery metadata.")
@@ -137,17 +173,17 @@ def parse_file_metadata(payload: str | bytes, *, expected: DiscoveredRecord) -> 
         matches = [
             (key, value)
             for key, value in records.items()
-            if isinstance(value, Mapping) and str(value.get("md5", "")).casefold() == expected.md5
+            if isinstance(value, Mapping) and str(value.get("md5", "")).casefold() == expected_md5
         ]
         if len(matches) != 1:
             raise LibGenMetadataError("LibGen file identity is missing or ambiguous.")
         key, record = matches[0]
 
     file_id = _positive_identifier(key, label="file")
-    if expected.file_id is not None and file_id != expected.file_id:
+    if expected_file_id is not None and file_id != expected_file_id:
         raise LibGenMetadataError("LibGen file identity conflicts with discovery metadata.")
     md5 = _required_md5(record.get("md5"))
-    if md5 != expected.md5:
+    if md5 != expected_md5:
         raise LibGenMetadataError("LibGen MD5 conflicts with discovery metadata.")
     if _source_flag(record.get("visible"), default=True) is False:
         raise LibGenMetadataError("LibGen file is not visible.")
@@ -156,22 +192,22 @@ def parse_file_metadata(payload: str | bytes, *, expected: DiscoveredRecord) -> 
 
     size_bytes = _optional_integer(record.get("filesize"), label="size")
     if (
-        expected.size_bytes is not None
+        expected_size_bytes is not None
         and size_bytes is not None
-        and size_bytes != expected.size_bytes
+        and abs(size_bytes - expected_size_bytes) > (expected_size_tolerance_bytes or 0)
     ):
         raise LibGenMetadataError("LibGen file size conflicts with discovery metadata.")
     extension = _optional_extension(record.get("extension"))
-    if expected.extension is not None and extension is not None and extension != expected.extension:
+    if expected_extension is not None and extension is not None and extension != expected_extension:
         raise LibGenMetadataError("LibGen file extension conflicts with discovery metadata.")
 
     relations = record.get("editions", {})
     edition_ids = _relation_ids(relations, field="e_id", label="edition")
     edition_id: int | None
-    if expected.edition_id is not None:
-        if edition_ids and expected.edition_id not in edition_ids:
+    if expected_edition_id is not None:
+        if edition_ids and expected_edition_id not in edition_ids:
             raise LibGenMetadataError("LibGen edition identity conflicts with discovery metadata.")
-        edition_id = expected.edition_id
+        edition_id = expected_edition_id
     else:
         edition_id = min(edition_ids) if edition_ids else None
 
@@ -367,9 +403,9 @@ def _source_flag(value: object, *, default: bool) -> bool:
     if value in {None, ""}:
         return default
     normalized = str(value).casefold()
-    if normalized in {"1", "true"}:
+    if normalized in {"1", "true", "y", "yes"}:
         return True
-    if normalized in {"0", "false"}:
+    if normalized in {"0", "false", "n", "no"}:
         return False
     raise LibGenMetadataError("LibGen source flag is malformed.")
 

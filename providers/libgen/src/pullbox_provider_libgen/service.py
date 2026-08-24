@@ -4,16 +4,37 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import re
 import socket
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from typing import TYPE_CHECKING
+from typing import Protocol
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
-from pullbox_provider_contract.models import Artifact, Candidate, SearchIntent
+from pullbox_provider_contract.models import (
+    Artifact,
+    ArtifactCoverage,
+    ArtifactRoute,
+    Candidate,
+    Mirror,
+    ResolverProfile,
+    SearchIntent,
+)
+from pullbox_provider_contract.resolver import ProviderResolverError
 from pullbox_provider_contract.search_terms import collection_title_fragment, is_collection_intent
+from pullbox_provider_contract.source_http import BrowserChallengeRequiredError
 
-if TYPE_CHECKING:
-    from pullbox_provider_contract.models import ResolverProfile
+from pullbox_provider_libgen.cache import BoundedTTLCache
+from pullbox_provider_libgen.metadata import (
+    EditionMetadata,
+    FileMetadata,
+    LibGenMetadataEnricher,
+    _edition_metadata_url,
+    _file_metadata_url,
+    parse_edition_metadata,
+    parse_file_metadata_by_md5,
+)
+from pullbox_provider_libgen.parser import LibGenLayoutError, parse_search_html
+from pullbox_provider_libgen.transport import LibGenSourceError, LibGenSourceSession
 
 KNOWN_SOURCE_DOMAINS = (
     "libgen.gl",
@@ -31,8 +52,21 @@ _SPECIAL_USE_SOURCE_SUFFIXES = (
     "internal",
     "home.arpa",
 )
+_MAX_METADATA_BYTES = 512 * 1024
 
 SourceResolver = Callable[[str, int], Awaitable[Sequence[str]]]
+_CANDIDATE_ID = re.compile(r"\Alibgen:(?P<md5>[0-9a-f]{32})\Z")
+
+
+class SourceSession(Protocol):
+    async def fetch_text(self, url: str, *, max_bytes: int = ...) -> str: ...
+
+    async def resolve_redirect(self, url: str) -> str: ...
+
+    async def aclose(self) -> None: ...
+
+
+SessionFactory = Callable[[str, ResolverProfile | None], SourceSession]
 
 
 class LibGenSourceOriginError(ValueError):
@@ -167,28 +201,229 @@ def _search_url(origin: str, query: str) -> str:
 
 
 class LibGenProviderService:
-    """Bounded LibGen provider; source behavior is added in later LG-2 slices."""
+    """Bounded LibGen search, enrichment, failover, and resolution."""
+
+    def __init__(
+        self,
+        *,
+        session_factory: SessionFactory | None = None,
+        origin_resolver: SourceResolver | None = None,
+    ) -> None:
+        self._origin_resolver = origin_resolver
+        self._session_factory = session_factory or self._new_session
+        self._search_cache: BoundedTTLCache[str, tuple[Candidate, ...]] = BoundedTTLCache(
+            max_entries=512,
+            ttl_seconds=10 * 60,
+            negative_ttl_seconds=2 * 60,
+        )
+        self._metadata_cache: BoundedTTLCache[
+            str,
+            FileMetadata | EditionMetadata,
+        ] = BoundedTTLCache(
+            max_entries=2_048,
+            ttl_seconds=60 * 60,
+            negative_ttl_seconds=2 * 60,
+        )
 
     async def source_available(self) -> bool:
+        for origin in KNOWN_SOURCE_URLS[:2]:
+            session = self._session_factory(origin, None)
+            try:
+                await session.fetch_text(f"{origin}/index.php")
+            except BrowserChallengeRequiredError:
+                return True
+            except (LibGenSourceError, ProviderResolverError):
+                continue
+            finally:
+                await session.aclose()
+            return True
         return False
 
     async def search(
         self,
-        _intent: SearchIntent,
+        intent: SearchIntent,
         *,
         provider_config: Mapping[str, object],
         limit: int,
         resolver_profile: ResolverProfile | None = None,
     ) -> list[Candidate]:
-        del provider_config, limit, resolver_profile
-        raise RuntimeError("LibGen discovery is not implemented.")
+        origins = await self._operation_origins(provider_config)
+        last_error: Exception | None = None
+        for origin in origins:
+            try:
+                return await self._search_origin(
+                    origin,
+                    intent=intent,
+                    limit=limit,
+                    resolver_profile=resolver_profile,
+                )
+            except (
+                BrowserChallengeRequiredError,
+                LibGenLayoutError,
+                ProviderResolverError,
+            ) as exc:
+                last_error = exc
+            except LibGenSourceError as exc:
+                if not exc.retryable:
+                    raise
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        return []
 
     async def resolve(
         self,
-        _provider_candidate_id: str,
+        provider_candidate_id: str,
         *,
         provider_config: Mapping[str, object],
         resolver_profile: ResolverProfile | None = None,
     ) -> list[Artifact]:
-        del provider_config, resolver_profile
-        raise RuntimeError("LibGen resolution is not implemented.")
+        md5 = _candidate_md5(provider_candidate_id)
+        origins = await self._operation_origins(provider_config)
+        last_error: Exception | None = None
+        for origin in origins:
+            session = self._session_factory(origin, resolver_profile)
+            try:
+                return [await self._resolve_origin(session, origin=origin, md5=md5)]
+            except (
+                BrowserChallengeRequiredError,
+                ProviderResolverError,
+            ) as exc:
+                last_error = exc
+            except LibGenSourceError as exc:
+                if not exc.retryable:
+                    raise
+                last_error = exc
+            finally:
+                await session.aclose()
+        if last_error is not None:
+            raise last_error
+        return []
+
+    def _new_session(
+        self,
+        origin: str,
+        resolver_profile: ResolverProfile | None,
+    ) -> SourceSession:
+        return LibGenSourceSession(
+            origin,
+            resolver_profile=resolver_profile,
+            target_resolver=self._origin_resolver,
+        )
+
+    async def _operation_origins(self, provider_config: Mapping[str, object]) -> list[str]:
+        preferred = await validate_source_origin(
+            str(provider_config.get("source_url", DEFAULT_SOURCE_URL)),
+            resolver=self._origin_resolver,
+        )
+        origins = [preferred]
+        for candidate in KNOWN_SOURCE_URLS:
+            if candidate == preferred:
+                continue
+            try:
+                alternate = await validate_source_origin(
+                    candidate,
+                    resolver=self._origin_resolver,
+                )
+            except LibGenSourceOriginError:
+                continue
+            origins.append(alternate)
+            break
+        return origins
+
+    async def _search_origin(
+        self,
+        origin: str,
+        *,
+        intent: SearchIntent,
+        limit: int,
+        resolver_profile: ResolverProfile | None,
+    ) -> list[Candidate]:
+        cache_key = f"{origin}:{limit}:{intent.model_dump_json()}"
+        cached = self._search_cache.get(cache_key)
+        if cached.hit:
+            return list(cached.value or ())
+
+        session = self._session_factory(origin, resolver_profile)
+        try:
+            async def fetch_metadata(url: str) -> str:
+                return await session.fetch_text(url, max_bytes=_MAX_METADATA_BYTES)
+
+            enricher = LibGenMetadataEnricher(
+                fetcher=fetch_metadata,
+                cache=self._metadata_cache,
+            )
+            candidates: list[Candidate] = []
+            seen: set[str] = set()
+            for query in _build_queries(intent):
+                html = await session.fetch_text(_search_url(origin, query))
+                for discovered in parse_search_html(html, source_origin=origin):
+                    if discovered.md5 in seen:
+                        continue
+                    seen.add(discovered.md5)
+                    candidate = await enricher.enrich(discovered)
+                    if candidate is not None:
+                        candidates.append(candidate)
+                    if len(candidates) >= limit:
+                        result = tuple(candidates[:limit])
+                        self._search_cache.set(cache_key, result)
+                        return list(result)
+            result = tuple(candidates[:limit])
+            self._search_cache.set(cache_key, result or None)
+            return list(result)
+        finally:
+            await session.aclose()
+
+    async def _resolve_origin(
+        self,
+        session: SourceSession,
+        *,
+        origin: str,
+        md5: str,
+    ) -> Artifact:
+        file_payload = await session.fetch_text(
+            _file_metadata_url(origin, md5),
+            max_bytes=_MAX_METADATA_BYTES,
+        )
+        file_metadata = parse_file_metadata_by_md5(file_payload, expected_md5=md5)
+        edition = None
+        if file_metadata.edition_id is not None:
+            edition_payload = await session.fetch_text(
+                _edition_metadata_url(origin, file_metadata.edition_id),
+                max_bytes=_MAX_METADATA_BYTES,
+            )
+            edition = parse_edition_metadata(
+                edition_payload,
+                expected_edition_id=file_metadata.edition_id,
+                expected_file_id=file_metadata.file_id,
+            )
+        destination = await session.resolve_redirect(f"{origin}/get.php?md5={md5}")
+        issue_numbers = [edition.issue_number] if edition and edition.issue_number else []
+        return Artifact(
+            artifact_id=f"libgen-direct:{md5}",
+            coverage=ArtifactCoverage(
+                issue_numbers=issue_numbers,
+                volume=edition.issue_volume if edition else None,
+                description=(edition.series_name or edition.title) if edition else None,
+            ),
+            route=ArtifactRoute.DIRECT_ARTIFACT,
+            format=file_metadata.extension,
+            edition=edition.edition_type if edition else None,
+            size_bytes=file_metadata.size_bytes,
+            mirrors=[
+                Mirror(
+                    mirror_id=f"libgen:{md5}:direct",
+                    host_kind="generic_https",
+                    final_url=destination,
+                    size_bytes=file_metadata.size_bytes,
+                    checksum=f"md5:{md5}",
+                )
+            ],
+        )
+
+
+def _candidate_md5(provider_candidate_id: str) -> str:
+    match = _CANDIDATE_ID.fullmatch(provider_candidate_id)
+    if match is None:
+        raise ValueError("LibGen candidate identity is malformed.")
+    return match.group("md5")

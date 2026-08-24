@@ -28,12 +28,16 @@ from pullbox_provider_contract.models import (
 from pullbox_provider_contract.resolver import ProviderResolverError
 from pullbox_provider_contract.source_http import BrowserChallengeRequiredError
 
+from pullbox_provider_libgen.metadata import LibGenMetadataError
+from pullbox_provider_libgen.parser import LibGenLayoutError
 from pullbox_provider_libgen.service import (
     DEFAULT_SOURCE_URL,
     KNOWN_SOURCE_DOMAINS,
     KNOWN_SOURCE_URLS,
     LibGenProviderService,
+    LibGenSourceOriginError,
 )
+from pullbox_provider_libgen.transport import LibGenSourceError
 
 
 def _provider_version() -> str:
@@ -137,6 +141,26 @@ def create_app(
                 ),
                 payload.deadline,
             )
+        except LibGenSourceOriginError as exc:
+            raise ProtocolError(
+                422,
+                "provider_configuration_invalid",
+                "LibGen source configuration is invalid.",
+            ) from exc
+        except LibGenLayoutError as exc:
+            raise ProtocolError(
+                503,
+                "source_contract_changed",
+                "LibGen search layout is no longer supported.",
+            ) from exc
+        except LibGenMetadataError as exc:
+            raise ProtocolError(
+                422,
+                "candidate_invalid",
+                "LibGen candidate metadata is invalid.",
+            ) from exc
+        except LibGenSourceError as exc:
+            raise _source_protocol_error(exc) from exc
         except BrowserChallengeRequiredError as exc:
             raise ProtocolError(
                 503,
@@ -177,6 +201,26 @@ def create_app(
                 ),
                 payload.deadline,
             )
+        except LibGenSourceOriginError as exc:
+            raise ProtocolError(
+                422,
+                "provider_configuration_invalid",
+                "LibGen source configuration is invalid.",
+            ) from exc
+        except LibGenMetadataError as exc:
+            raise ProtocolError(
+                422,
+                "candidate_invalid",
+                "LibGen candidate metadata is invalid.",
+            ) from exc
+        except ValueError as exc:
+            raise ProtocolError(
+                422,
+                "candidate_invalid",
+                "LibGen candidate identity is invalid.",
+            ) from exc
+        except LibGenSourceError as exc:
+            raise _source_protocol_error(exc) from exc
         except BrowserChallengeRequiredError as exc:
             raise ProtocolError(
                 503,
@@ -198,3 +242,16 @@ def create_app(
         return ResolveResponse(request_id=payload.request_id, artifacts=artifacts)
 
     return app
+
+
+def _source_protocol_error(exc: LibGenSourceError) -> ProtocolError:
+    status_code = 429 if exc.code == "source_rate_limited" else 503
+    messages = {
+        "artifact_unavailable": "LibGen artifact is temporarily unavailable.",
+        "source_rate_limited": "LibGen source is rate limited.",
+    }
+    return ProtocolError(
+        status_code,
+        exc.code,
+        messages.get(exc.code, "LibGen source is temporarily unavailable."),
+    )

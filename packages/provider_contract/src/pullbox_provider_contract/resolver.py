@@ -239,12 +239,17 @@ async def resolve_after_challenge(
     *,
     source_url: str,
     profile: ResolverProfile,
+    recognized_challenge: BrowserChallengeKind | None = None,
     http_client: httpx.AsyncClient | None = None,
     runtime: ProviderResolverRuntime | None = None,
     target_resolver: ProviderTargetResolver | None = None,
 ) -> ProviderResolverOutcome | None:
     """Call standard ``/v1`` only when the ordinary response is a known challenge."""
-    challenge = detect_browser_challenge(response.status_code, response.headers, response.body)
+    challenge = recognized_challenge or detect_browser_challenge(
+        response.status_code,
+        response.headers,
+        response.body,
+    )
     if challenge is None:
         return None
     target_url = await _validate_source_url(

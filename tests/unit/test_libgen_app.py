@@ -7,6 +7,10 @@ import pytest
 from fastapi import FastAPI
 from pullbox_provider_contract.models import Artifact, Candidate
 from pullbox_provider_libgen.app import create_app
+from pullbox_provider_libgen.metadata import LibGenMetadataError
+from pullbox_provider_libgen.parser import LibGenLayoutError
+from pullbox_provider_libgen.service import LibGenSourceOriginError
+from pullbox_provider_libgen.transport import LibGenSourceError
 
 from tests.conftest import TEST_TOKEN, resolve_payload, search_payload
 
@@ -154,3 +158,58 @@ async def test_libgen_search_and_resolve_forward_only_request_scoped_inputs() ->
     assert service.resolve_kwargs["provider_config"] == provider_config
     assert service.search_kwargs["resolver_profile"].endpoint == "http://resolver:8191"
     assert service.resolve_kwargs["resolver_profile"].declared_domains == ["libgen.gl"]
+
+
+@pytest.mark.parametrize(
+    ("path", "error", "status", "code"),
+    [
+        (
+            "/v1/search",
+            LibGenSourceOriginError("unsafe"),
+            422,
+            "provider_configuration_invalid",
+        ),
+        (
+            "/v1/search",
+            LibGenLayoutError("changed"),
+            503,
+            "source_contract_changed",
+        ),
+        (
+            "/v1/resolve",
+            LibGenMetadataError("conflict"),
+            422,
+            "candidate_invalid",
+        ),
+        (
+            "/v1/resolve",
+            ValueError("candidate"),
+            422,
+            "candidate_invalid",
+        ),
+        (
+            "/v1/search",
+            LibGenSourceError("source_rate_limited", "limited"),
+            429,
+            "source_rate_limited",
+        ),
+        (
+            "/v1/resolve",
+            LibGenSourceError("artifact_unavailable", "missing"),
+            503,
+            "artifact_unavailable",
+        ),
+    ],
+)
+async def test_libgen_errors_map_to_actionable_protocol_codes(
+    path: str,
+    error: Exception,
+    status: int,
+    code: str,
+) -> None:
+    payload = search_payload() if path.endswith("search") else resolve_payload()
+
+    response = await _request(_app(_LibGenService(error=error)), "POST", path, json=payload)
+
+    assert response.status_code == status
+    assert response.json()["error"]["code"] == code
