@@ -81,6 +81,7 @@ jobs:
           case "${PROVIDER}" in
             getcomics) RELEASE_NAME="GetComics Provider" ;;
             annas-archive) RELEASE_NAME="Anna's Archive Provider" ;;
+            libgen) RELEASE_NAME="Library Genesis Provider" ;;
             synthetic) RELEASE_NAME="Synthetic Provider" ;;
             *)
               echo "::error::Unexpected provider in trusted release metadata: ${PROVIDER}"

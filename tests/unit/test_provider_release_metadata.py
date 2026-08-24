@@ -60,6 +60,22 @@ def test_tag_release_maps_annas_archive_to_both_registry_names() -> None:
     assert release.dockerhub_image == "docker.io/pullbox/pullbox-provider-annas-archive"
 
 
+def test_tag_release_maps_libgen_to_both_registry_names() -> None:
+    release = _load_module().resolve_release(
+        repository_owner="pullboxapp",
+        tag="libgen-v0.1.0",
+    )
+
+    assert release.provider == "libgen"
+    assert release.version == "0.1.0"
+    assert release.release_tag == "libgen-v0.1.0"
+    assert release.is_release is True
+    assert release.is_prerelease is False
+    assert release.dockerfile == "docker/Dockerfile.libgen"
+    assert release.ghcr_image == "ghcr.io/pullboxapp/pullbox-provider-libgen"
+    assert release.dockerhub_image == "docker.io/pullbox/pullbox-provider-libgen"
+
+
 def test_tag_release_uses_canonical_provider_prerelease(tmp_path: Path) -> None:
     pyproject = tmp_path / "providers" / "annas_archive" / "pyproject.toml"
     pyproject.parent.mkdir(parents=True)

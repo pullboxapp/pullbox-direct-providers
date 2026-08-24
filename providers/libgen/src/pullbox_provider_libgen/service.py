@@ -416,6 +416,7 @@ class LibGenProviderService:
 
         session = self._session_factory(origin, resolver_profile)
         try:
+
             async def fetch_metadata(url: str) -> str:
                 return await session.fetch_text(url, max_bytes=_MAX_METADATA_BYTES)
 

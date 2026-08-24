@@ -62,7 +62,23 @@ class LibGenSourceSession:
         browser_resolver: BrowserResolver = resolve_after_challenge,
     ) -> None:
         parsed = urlsplit(source_origin)
-        if parsed.scheme != "https" or not parsed.hostname or parsed.path not in {"", "/"}:
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise LibGenSourceError(
+                "source_origin_invalid",
+                "LibGen source origin is invalid.",
+            ) from exc
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or port not in {None, 443}
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
             raise LibGenSourceError("source_origin_invalid", "LibGen source origin is invalid.")
         self._origin = f"https://{parsed.hostname.casefold()}"
         self._source_host = parsed.hostname.casefold()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Sequence
 from pathlib import Path
@@ -7,6 +8,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from pullbox_provider_contract.models import ResolverProfile, SearchIntent
+from pullbox_provider_contract.resolver import ProviderResolverError
 from pullbox_provider_contract.source_http import BrowserChallengeRequiredError
 from pullbox_provider_libgen.service import (
     LibGenProviderService,
@@ -161,8 +163,8 @@ class _SourceSession:
         origin: str,
         *,
         search_html: str | None = None,
-        fail: Exception | None = None,
-        redirect_fail: Exception | None = None,
+        fail: BaseException | None = None,
+        redirect_fail: BaseException | None = None,
     ) -> None:
         self.origin = origin
         self.search_html = search_html or _fixture("search-results-v1.html")
@@ -206,8 +208,8 @@ class _SessionFactory:
         self,
         *,
         search_by_origin: dict[str, str] | None = None,
-        failure_by_origin: dict[str, Exception] | None = None,
-        redirect_failure_by_origin: dict[str, Exception] | None = None,
+        failure_by_origin: dict[str, BaseException] | None = None,
+        redirect_failure_by_origin: dict[str, BaseException] | None = None,
     ) -> None:
         self.search_by_origin = search_by_origin or {}
         self.failure_by_origin = failure_by_origin or {}
@@ -433,6 +435,23 @@ async def test_source_health_classifies_each_known_origin_without_a_resolver() -
     assert all(session.closed for session in factory.sessions)
 
 
+async def test_source_health_classifies_resolver_failure_as_unavailable() -> None:
+    factory = _SessionFactory(
+        failure_by_origin={
+            "https://libgen.gl": ProviderResolverError(
+                "resolver_timed_out",
+                "private resolver detail",
+            )
+        }
+    )
+    service = LibGenProviderService(session_factory=factory, origin_resolver=_public_resolver)
+
+    health = await service.source_health()
+
+    assert health["libgen.gl"] == "unavailable"
+    assert all(session.closed for session in factory.sessions)
+
+
 async def test_search_observation_is_structured_and_excludes_sensitive_source_evidence() -> None:
     factory = _SessionFactory()
     service = LibGenProviderService(session_factory=factory, origin_resolver=_public_resolver)
@@ -476,3 +495,46 @@ async def test_failed_observation_records_only_a_bounded_failure_class() -> None
     rendered = json.dumps(logs[0])
     assert "secret" not in rendered
     assert "libgen.gl" not in rendered
+
+
+@pytest.mark.parametrize("operation", ["search", "resolve"])
+async def test_cancelled_operation_is_observed_and_propagated(operation: str) -> None:
+    factory = _SessionFactory(failure_by_origin={"https://libgen.gl": asyncio.CancelledError()})
+    service = LibGenProviderService(session_factory=factory, origin_resolver=_public_resolver)
+
+    with capture_logs() as logs:
+        with pytest.raises(asyncio.CancelledError):
+            if operation == "search":
+                await service.search(
+                    _search_intent(),
+                    provider_config={"source_url": "https://libgen.gl"},
+                    limit=1,
+                )
+            else:
+                await service.resolve(
+                    "libgen:0123456789abcdef0123456789abcdef",
+                    provider_config={"source_url": "https://libgen.gl"},
+                )
+
+    assert len(logs) == 1
+    assert logs[0]["operation"] == operation
+    assert logs[0]["outcome"] == "failure"
+    assert logs[0]["failure_class"] == "cancelled"
+    assert factory.sessions[0].closed is True
+
+
+async def test_successful_resolve_observation_excludes_candidate_identity() -> None:
+    factory = _SessionFactory()
+    service = LibGenProviderService(session_factory=factory, origin_resolver=_public_resolver)
+
+    with capture_logs() as logs:
+        artifacts = await service.resolve(
+            "libgen:0123456789abcdef0123456789abcdef",
+            provider_config={"source_url": "https://libgen.gl"},
+        )
+
+    assert len(artifacts) == 1
+    assert logs[0]["operation"] == "resolve"
+    assert logs[0]["outcome"] == "success"
+    assert logs[0]["result_count"] == 1
+    assert "0123456789abcdef0123456789abcdef" not in json.dumps(logs[0])

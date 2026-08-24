@@ -6,6 +6,8 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from pullbox_provider_contract.models import Artifact, Candidate, ProviderStatus
+from pullbox_provider_contract.resolver import ProviderResolverError
+from pullbox_provider_contract.source_http import BrowserChallengeRequiredError
 from pullbox_provider_libgen.app import create_app
 from pullbox_provider_libgen.metadata import LibGenMetadataError
 from pullbox_provider_libgen.parser import LibGenLayoutError
@@ -237,6 +239,18 @@ async def test_libgen_search_and_resolve_forward_only_request_scoped_inputs() ->
             "source_contract_changed",
         ),
         (
+            "/v1/search",
+            LibGenMetadataError("conflict"),
+            422,
+            "candidate_invalid",
+        ),
+        (
+            "/v1/resolve",
+            LibGenSourceOriginError("unsafe"),
+            422,
+            "provider_configuration_invalid",
+        ),
+        (
             "/v1/resolve",
             LibGenMetadataError("conflict"),
             422,
@@ -260,6 +274,42 @@ async def test_libgen_search_and_resolve_forward_only_request_scoped_inputs() ->
             503,
             "artifact_unavailable",
         ),
+        (
+            "/v1/search",
+            BrowserChallengeRequiredError(),
+            503,
+            "browser_challenge_required",
+        ),
+        (
+            "/v1/resolve",
+            BrowserChallengeRequiredError(),
+            503,
+            "browser_challenge_required",
+        ),
+        (
+            "/v1/search",
+            ProviderResolverError("resolver_timed_out", "private resolver detail"),
+            503,
+            "resolver_timed_out",
+        ),
+        (
+            "/v1/resolve",
+            ProviderResolverError("resolver_failed", "private resolver detail"),
+            503,
+            "resolver_failed",
+        ),
+        (
+            "/v1/search",
+            RuntimeError("private upstream detail"),
+            503,
+            "source_unavailable",
+        ),
+        (
+            "/v1/resolve",
+            RuntimeError("private upstream detail"),
+            503,
+            "source_unavailable",
+        ),
     ],
 )
 async def test_libgen_errors_map_to_actionable_protocol_codes(
@@ -274,3 +324,22 @@ async def test_libgen_errors_map_to_actionable_protocol_codes(
 
     assert response.status_code == status
     assert response.json()["error"]["code"] == code
+    assert "private" not in response.text
+
+
+async def test_libgen_health_reports_unavailable_when_no_source_is_usable() -> None:
+    response = await _request(
+        _app(
+            _LibGenService(
+                source_health={
+                    domain: ProviderStatus.UNAVAILABLE for domain in ("libgen.gl", "libgen.li")
+                }
+            )
+        ),
+        "GET",
+        "/v1/health",
+    )
+
+    assert response.status_code == 200
+    assert response.json()["process_status"] == "healthy"
+    assert response.json()["source_status"] == "unavailable"

@@ -10,6 +10,7 @@ on:
     tags:
       - "getcomics-v*"
       - "annas-archive-v*"
+      - "libgen-v*"
       - "synthetic-v*"
   workflow_dispatch:
     inputs:
@@ -20,6 +21,7 @@ on:
         options:
           - getcomics
           - annas-archive
+          - libgen
           - synthetic
 
 permissions:
