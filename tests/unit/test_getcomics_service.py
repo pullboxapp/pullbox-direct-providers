@@ -261,6 +261,11 @@ async def test_standard_issue_fallback_prioritizes_covering_pack_over_noncoverin
         return """
         <html><body><h1 class="search-title">Search Result</h1>
           <article><h1 class="post-title">
+            <a href="https://getcomics.org/dc/example-heroes-1-2026/">
+              Example Heroes #1 (2026)
+            </a>
+          </h1></article>
+          <article><h1 class="post-title">
             <a href="https://getcomics.org/dc/example-heroes-5-10-2026/">
               Example Heroes #5-10 (2026)
             </a>

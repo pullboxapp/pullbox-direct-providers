@@ -78,9 +78,20 @@ class GetComicsProviderService:
                 seen_candidate_ids=seen_candidate_ids,
                 resolver_profile=resolver_profile,
             )
-            # Exact queries can return unrelated releases first. Prioritize the
-            # fallback pack that explicitly covers the requested issue instead.
-            return [*fallback_candidates, *candidates][:limit]
+            # Exact queries can return unrelated releases first. Prioritize only
+            # fallback packs that explicitly cover the requested issue; broad
+            # fallback noise must not displace a targeted exact-search result.
+            covering_fallbacks = [
+                candidate
+                for candidate in fallback_candidates
+                if _candidate_covers_intent(candidate, intent)
+            ]
+            noncovering_fallbacks = [
+                candidate
+                for candidate in fallback_candidates
+                if not _candidate_covers_intent(candidate, intent)
+            ]
+            return [*covering_fallbacks, *candidates, *noncovering_fallbacks][:limit]
         return candidates[:limit]
 
     async def _append_search_candidates(
