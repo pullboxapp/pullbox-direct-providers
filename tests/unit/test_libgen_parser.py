@@ -90,6 +90,17 @@ def test_parse_search_html_distinguishes_zero_results_from_contract_drift() -> N
         )
 
 
+def test_parse_search_html_rejects_incompatible_result_row_shape_as_drift() -> None:
+    incompatible_row = f"<tr>{'<td>unexpected</td>' * 10}</tr>"
+    html = _fixture("search-zero-v1.html").replace(
+        "</table>",
+        f"{incompatible_row}</table>",
+    )
+
+    with pytest.raises(LibGenLayoutError, match="layout"):
+        parse_search_html(html, source_origin="https://libgen.gl")
+
+
 @pytest.mark.parametrize(
     "source_origin",
     [

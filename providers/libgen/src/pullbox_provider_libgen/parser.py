@@ -147,9 +147,15 @@ def parse_search_html(html: str, *, source_origin: str) -> list[DiscoveredRecord
     if not parser.has_catalog_table or not parser.rows or not _is_header_row(parser.rows[0]):
         raise LibGenLayoutError("LibGen search layout is no longer recognized.")
 
+    data_rows = parser.rows[1:]
+    if data_rows and not any(
+        len(row.cells) == 9 and all(cell.tag == "td" for cell in row.cells) for row in data_rows
+    ):
+        raise LibGenLayoutError("LibGen search result row layout is no longer recognized.")
+
     records: list[DiscoveredRecord] = []
     seen: set[str] = set()
-    for row in parser.rows[1:]:
+    for row in data_rows:
         try:
             record = _parse_record(row, origin=origin)
         except (ValueError, OverflowError):

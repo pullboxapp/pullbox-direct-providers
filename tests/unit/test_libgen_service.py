@@ -10,6 +10,7 @@ import pytest
 from pullbox_provider_contract.models import ResolverProfile, SearchIntent
 from pullbox_provider_contract.resolver import ProviderResolverError
 from pullbox_provider_contract.source_http import BrowserChallengeRequiredError
+from pullbox_provider_libgen.metadata import LibGenMetadataError
 from pullbox_provider_libgen.service import (
     LibGenProviderService,
     LibGenSourceOriginError,
@@ -411,6 +412,27 @@ async def test_resolve_does_not_fail_over_to_work_around_unsafe_destination() ->
         )
 
     assert [session.origin for session in factory.sessions] == ["https://libgen.gl"]
+
+
+async def test_resolve_fails_over_when_preferred_origin_lacks_candidate_metadata() -> None:
+    factory = _SessionFactory(
+        failure_by_origin={
+            "https://libgen.gl": LibGenMetadataError("candidate is absent from this origin")
+        }
+    )
+    service = LibGenProviderService(session_factory=factory, origin_resolver=_public_resolver)
+
+    artifacts = await service.resolve(
+        "libgen:0123456789abcdef0123456789abcdef",
+        provider_config={"source_url": "https://libgen.gl"},
+    )
+
+    assert len(artifacts) == 1
+    assert [session.origin for session in factory.sessions] == [
+        "https://libgen.gl",
+        "https://libgen.li",
+    ]
+    assert all(session.closed for session in factory.sessions)
 
 
 async def test_source_health_classifies_each_known_origin_without_a_resolver() -> None:

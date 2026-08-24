@@ -357,6 +357,7 @@ class LibGenProviderService:
                 return [await self._resolve_origin(session, origin=origin, md5=md5)]
             except (
                 BrowserChallengeRequiredError,
+                LibGenMetadataError,
                 ProviderResolverError,
             ) as exc:
                 last_error = exc
