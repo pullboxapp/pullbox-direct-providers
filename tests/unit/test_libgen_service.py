@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -15,6 +16,7 @@ from pullbox_provider_libgen.service import (
     validate_source_origin,
 )
 from pullbox_provider_libgen.transport import LibGenSourceError
+from structlog.testing import capture_logs
 
 _FIXTURES = Path(__file__).parents[1] / "fixtures" / "libgen"
 
@@ -407,3 +409,70 @@ async def test_resolve_does_not_fail_over_to_work_around_unsafe_destination() ->
         )
 
     assert [session.origin for session in factory.sessions] == ["https://libgen.gl"]
+
+
+async def test_source_health_classifies_each_known_origin_without_a_resolver() -> None:
+    factory = _SessionFactory(
+        failure_by_origin={
+            "https://libgen.gl": BrowserChallengeRequiredError(),
+            "https://libgen.li": LibGenSourceError("source_rate_limited", "limited"),
+            "https://libgen.la": LibGenSourceError("source_unavailable", "offline"),
+            "https://libgen.bz": LibGenSourceError("source_unavailable", "offline"),
+        }
+    )
+    service = LibGenProviderService(session_factory=factory, origin_resolver=_public_resolver)
+
+    assert await service.source_health() == {
+        "libgen.gl": "challenge_required",
+        "libgen.li": "rate_limited",
+        "libgen.vg": "healthy",
+        "libgen.la": "unavailable",
+        "libgen.bz": "unavailable",
+    }
+    assert factory.profiles == [None] * 5
+    assert all(session.closed for session in factory.sessions)
+
+
+async def test_search_observation_is_structured_and_excludes_sensitive_source_evidence() -> None:
+    factory = _SessionFactory()
+    service = LibGenProviderService(session_factory=factory, origin_resolver=_public_resolver)
+
+    with capture_logs() as logs:
+        candidates = await service.search(
+            _search_intent(),
+            provider_config={"source_url": "https://libgen.gl"},
+            limit=1,
+        )
+
+    assert len(candidates) == 1
+    assert len(logs) == 1
+    observation = logs[0]
+    assert observation["event"] == "provider_operation"
+    assert observation["provider"] == "libgen"
+    assert observation["operation"] == "search"
+    assert observation["outcome"] == "success"
+    assert observation["result_count"] == 1
+    assert isinstance(observation["duration_ms"], int)
+    rendered = json.dumps(observation)
+    assert "0123456789abcdef0123456789abcdef" not in rendered
+    assert "https://" not in rendered
+
+
+async def test_failed_observation_records_only_a_bounded_failure_class() -> None:
+    service = LibGenProviderService(origin_resolver=_public_resolver)
+    unsafe_config = {"source_url": "https://user:secret@libgen.gl"}
+
+    with capture_logs() as logs:
+        with pytest.raises(LibGenSourceOriginError):
+            await service.search(
+                _search_intent(),
+                provider_config=unsafe_config,
+                limit=1,
+            )
+
+    assert len(logs) == 1
+    assert logs[0]["outcome"] == "failure"
+    assert logs[0]["failure_class"] == "provider_configuration_invalid"
+    rendered = json.dumps(logs[0])
+    assert "secret" not in rendered
+    assert "libgen.gl" not in rendered

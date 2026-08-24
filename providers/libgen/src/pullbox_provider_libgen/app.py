@@ -16,6 +16,7 @@ from pullbox_provider_contract.api import (
 from pullbox_provider_contract.errors import ProtocolError
 from pullbox_provider_contract.models import (
     PROTOCOL_VERSION,
+    DiagnosticScalar,
     HealthResponse,
     ManifestResponse,
     ProviderCapabilities,
@@ -112,16 +113,27 @@ def create_app(
         dependencies=[Depends(authenticate)],
     )
     async def health() -> HealthResponse:
-        available = await provider_service.source_available()
+        source_health = await provider_service.source_health()
+        source_status = _source_status(tuple(source_health.values()))
+        diagnostics: dict[str, DiagnosticScalar] = {
+            "source": (
+                "reachable" if source_status is ProviderStatus.HEALTHY else source_status.value
+            ),
+            **{f"source.{domain}": status.value for domain, status in source_health.items()},
+        }
+        messages = {
+            ProviderStatus.HEALTHY: "LibGen provider is ready.",
+            ProviderStatus.CHALLENGE_REQUIRED: (
+                "LibGen source reachability requires a configured browser resolver."
+            ),
+            ProviderStatus.RATE_LIMITED: "LibGen source reachability is rate limited.",
+            ProviderStatus.UNAVAILABLE: "LibGen source reachability needs attention.",
+        }
         return HealthResponse(
             process_status=ProviderStatus.HEALTHY,
-            source_status=ProviderStatus.HEALTHY if available else ProviderStatus.DEGRADED,
-            message=(
-                "LibGen provider is ready."
-                if available
-                else "LibGen source reachability needs attention."
-            ),
-            diagnostics={"source": "reachable" if available else "unreachable"},
+            source_status=source_status,
+            message=messages[source_status],
+            diagnostics=diagnostics,
         )
 
     @app.post(
@@ -255,3 +267,14 @@ def _source_protocol_error(exc: LibGenSourceError) -> ProtocolError:
         exc.code,
         messages.get(exc.code, "LibGen source is temporarily unavailable."),
     )
+
+
+def _source_status(statuses: tuple[ProviderStatus, ...]) -> ProviderStatus:
+    for status in (
+        ProviderStatus.HEALTHY,
+        ProviderStatus.CHALLENGE_REQUIRED,
+        ProviderStatus.RATE_LIMITED,
+    ):
+        if status in statuses:
+            return status
+    return ProviderStatus.UNAVAILABLE

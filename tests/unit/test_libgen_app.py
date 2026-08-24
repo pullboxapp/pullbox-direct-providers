@@ -5,7 +5,7 @@ from typing import Any
 import httpx
 import pytest
 from fastapi import FastAPI
-from pullbox_provider_contract.models import Artifact, Candidate
+from pullbox_provider_contract.models import Artifact, Candidate, ProviderStatus
 from pullbox_provider_libgen.app import create_app
 from pullbox_provider_libgen.metadata import LibGenMetadataError
 from pullbox_provider_libgen.parser import LibGenLayoutError
@@ -19,16 +19,22 @@ class _LibGenService:
     def __init__(
         self,
         *,
-        available: bool = True,
+        source_health: dict[str, ProviderStatus] | None = None,
         error: Exception | None = None,
     ) -> None:
-        self.available = available
+        self.health_by_origin = source_health or {
+            "libgen.gl": ProviderStatus.HEALTHY,
+            "libgen.li": ProviderStatus.UNAVAILABLE,
+            "libgen.vg": ProviderStatus.UNAVAILABLE,
+            "libgen.la": ProviderStatus.UNAVAILABLE,
+            "libgen.bz": ProviderStatus.UNAVAILABLE,
+        }
         self.error = error
         self.search_kwargs: dict[str, object] | None = None
         self.resolve_kwargs: dict[str, object] | None = None
 
-    async def source_available(self, **_kwargs: object) -> bool:
-        return self.available
+    async def source_health(self) -> dict[str, ProviderStatus]:
+        return self.health_by_origin
 
     async def search(self, _intent: object, **kwargs: object) -> list[Candidate]:
         self.search_kwargs = kwargs
@@ -121,6 +127,61 @@ async def test_libgen_manifest_declares_open_source_origin_configuration() -> No
         "https://libgen.bz",
     ]
     assert "enum" not in source_url
+
+
+async def test_libgen_health_reports_process_and_each_source_separately() -> None:
+    response = await _request(
+        _app(
+            _LibGenService(
+                source_health={
+                    "libgen.gl": ProviderStatus.CHALLENGE_REQUIRED,
+                    "libgen.li": ProviderStatus.HEALTHY,
+                    "libgen.vg": ProviderStatus.RATE_LIMITED,
+                    "libgen.la": ProviderStatus.UNAVAILABLE,
+                    "libgen.bz": ProviderStatus.UNAVAILABLE,
+                }
+            )
+        ),
+        "GET",
+        "/v1/health",
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "protocol_version": "direct-download-provider/v1",
+        "process_status": "healthy",
+        "source_status": "healthy",
+        "message": "LibGen provider is ready.",
+        "retry_after_seconds": None,
+        "diagnostics": {
+            "source": "reachable",
+            "source.libgen.gl": "challenge_required",
+            "source.libgen.li": "healthy",
+            "source.libgen.vg": "rate_limited",
+            "source.libgen.la": "unavailable",
+            "source.libgen.bz": "unavailable",
+        },
+    }
+
+
+async def test_libgen_health_preserves_challenge_required_without_ready_source() -> None:
+    response = await _request(
+        _app(
+            _LibGenService(
+                source_health={
+                    domain: ProviderStatus.CHALLENGE_REQUIRED
+                    for domain in ("libgen.gl", "libgen.li")
+                }
+            )
+        ),
+        "GET",
+        "/v1/health",
+    )
+
+    assert response.status_code == 200
+    assert response.json()["process_status"] == "healthy"
+    assert response.json()["source_status"] == "challenge_required"
+    assert "browser resolver" in response.json()["message"]
 
 
 async def test_libgen_search_and_resolve_forward_only_request_scoped_inputs() -> None:

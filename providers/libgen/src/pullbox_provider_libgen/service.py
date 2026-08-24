@@ -6,16 +6,19 @@ import asyncio
 import ipaddress
 import re
 import socket
+import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Protocol
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
+import structlog
 from pullbox_provider_contract.models import (
     Artifact,
     ArtifactCoverage,
     ArtifactRoute,
     Candidate,
     Mirror,
+    ProviderStatus,
     ResolverProfile,
     SearchIntent,
 )
@@ -28,6 +31,7 @@ from pullbox_provider_libgen.metadata import (
     EditionMetadata,
     FileMetadata,
     LibGenMetadataEnricher,
+    LibGenMetadataError,
     _edition_metadata_url,
     _file_metadata_url,
     parse_edition_metadata,
@@ -53,6 +57,7 @@ _SPECIAL_USE_SOURCE_SUFFIXES = (
     "home.arpa",
 )
 _MAX_METADATA_BYTES = 512 * 1024
+_LOGGER = structlog.get_logger(__name__)
 
 SourceResolver = Callable[[str, int], Awaitable[Sequence[str]]]
 _CANDIDATE_ID = re.compile(r"\Alibgen:(?P<md5>[0-9a-f]{32})\Z")
@@ -225,19 +230,28 @@ class LibGenProviderService:
             negative_ttl_seconds=2 * 60,
         )
 
-    async def source_available(self) -> bool:
-        for origin in KNOWN_SOURCE_URLS[:2]:
+    async def source_health(self) -> dict[str, ProviderStatus]:
+        health: dict[str, ProviderStatus] = {}
+        for origin in KNOWN_SOURCE_URLS:
             session = self._session_factory(origin, None)
             try:
                 await session.fetch_text(f"{origin}/index.php")
             except BrowserChallengeRequiredError:
-                return True
-            except (LibGenSourceError, ProviderResolverError):
-                continue
+                status = ProviderStatus.CHALLENGE_REQUIRED
+            except LibGenSourceError as exc:
+                status = (
+                    ProviderStatus.RATE_LIMITED
+                    if exc.code == "source_rate_limited"
+                    else ProviderStatus.UNAVAILABLE
+                )
+            except ProviderResolverError:
+                status = ProviderStatus.UNAVAILABLE
+            else:
+                status = ProviderStatus.HEALTHY
             finally:
                 await session.aclose()
-            return True
-        return False
+            health[urlsplit(origin).hostname or origin] = status
+        return health
 
     async def search(
         self,
@@ -246,6 +260,35 @@ class LibGenProviderService:
         provider_config: Mapping[str, object],
         limit: int,
         resolver_profile: ResolverProfile | None = None,
+    ) -> list[Candidate]:
+        started = time.perf_counter()
+        try:
+            candidates = await self._search(
+                intent,
+                provider_config=provider_config,
+                limit=limit,
+                resolver_profile=resolver_profile,
+            )
+        except asyncio.CancelledError:
+            _observe_operation("search", started=started, failure_class="cancelled")
+            raise
+        except Exception as exc:
+            _observe_operation(
+                "search",
+                started=started,
+                failure_class=_failure_class(exc),
+            )
+            raise
+        _observe_operation("search", started=started, result_count=len(candidates))
+        return candidates
+
+    async def _search(
+        self,
+        intent: SearchIntent,
+        *,
+        provider_config: Mapping[str, object],
+        limit: int,
+        resolver_profile: ResolverProfile | None,
     ) -> list[Candidate]:
         origins = await self._operation_origins(provider_config)
         last_error: Exception | None = None
@@ -277,6 +320,33 @@ class LibGenProviderService:
         *,
         provider_config: Mapping[str, object],
         resolver_profile: ResolverProfile | None = None,
+    ) -> list[Artifact]:
+        started = time.perf_counter()
+        try:
+            artifacts = await self._resolve(
+                provider_candidate_id,
+                provider_config=provider_config,
+                resolver_profile=resolver_profile,
+            )
+        except asyncio.CancelledError:
+            _observe_operation("resolve", started=started, failure_class="cancelled")
+            raise
+        except Exception as exc:
+            _observe_operation(
+                "resolve",
+                started=started,
+                failure_class=_failure_class(exc),
+            )
+            raise
+        _observe_operation("resolve", started=started, result_count=len(artifacts))
+        return artifacts
+
+    async def _resolve(
+        self,
+        provider_candidate_id: str,
+        *,
+        provider_config: Mapping[str, object],
+        resolver_profile: ResolverProfile | None,
     ) -> list[Artifact]:
         md5 = _candidate_md5(provider_candidate_id)
         origins = await self._operation_origins(provider_config)
@@ -427,3 +497,39 @@ def _candidate_md5(provider_candidate_id: str) -> str:
     if match is None:
         raise ValueError("LibGen candidate identity is malformed.")
     return match.group("md5")
+
+
+def _observe_operation(
+    operation: str,
+    *,
+    started: float,
+    result_count: int | None = None,
+    failure_class: str | None = None,
+) -> None:
+    fields: dict[str, str | int] = {
+        "provider": "libgen",
+        "operation": operation,
+        "outcome": "failure" if failure_class is not None else "success",
+        "duration_ms": max(0, round((time.perf_counter() - started) * 1_000)),
+    }
+    if result_count is not None:
+        fields["result_count"] = result_count
+    if failure_class is not None:
+        fields["failure_class"] = failure_class
+    _LOGGER.info("provider_operation", **fields)
+
+
+def _failure_class(exc: Exception) -> str:
+    if isinstance(exc, LibGenSourceOriginError):
+        return "provider_configuration_invalid"
+    if isinstance(exc, LibGenLayoutError):
+        return "source_contract_changed"
+    if isinstance(exc, LibGenMetadataError):
+        return "candidate_invalid"
+    if isinstance(exc, LibGenSourceError):
+        return exc.code
+    if isinstance(exc, (BrowserChallengeRequiredError, ProviderResolverError)):
+        return exc.code
+    if isinstance(exc, ValueError):
+        return "candidate_invalid"
+    return "internal_error"
