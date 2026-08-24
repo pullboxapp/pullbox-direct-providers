@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -176,6 +178,87 @@ async def test_metadata_enricher_fetches_keyed_records_once_then_uses_cache() ->
     assert "object=f" in calls[0]
     assert "md5=0123456789abcdef0123456789abcdef" in calls[0]
     assert "object=e" in calls[1]
+    assert "ids=910" in calls[1]
+
+
+async def test_metadata_enricher_batches_multiple_keyed_records() -> None:
+    calls: list[str] = []
+    file_records = json.loads(_fixture("file-v1.json")) | json.loads(
+        _fixture("file-sparse-v1.json")
+    )
+    file_records["1202"]["editions"] = {"50002": {"e_id": "911"}}
+    edition_records = json.loads(_fixture("edition-v1.json"))
+    edition_records["911"] = {
+        "title": "Clockwork Harbor Deluxe Collection",
+        "series_name": "Clockwork Harbor",
+        "publisher": "Example Press",
+        "year": "2025",
+        "issue_number": "2",
+        "issue_volume": "2",
+        "visible": "1",
+        "files": {"70002": {"f_id": "1202"}},
+    }
+
+    async def fetcher(url: str) -> str:
+        calls.append(url)
+        return json.dumps(edition_records if "object=e" in url else file_records)
+
+    enricher = LibGenMetadataEnricher(fetcher=fetcher)
+    candidates = await enricher.enrich_many(_records())
+    cached = await enricher.enrich_many(_records())
+
+    assert cached == candidates
+    assert [candidate.provider_candidate_id for candidate in candidates] == [
+        "libgen:0123456789abcdef0123456789abcdef",
+        "libgen:fedcba9876543210fedcba9876543210",
+    ]
+    assert len(calls) == 2
+    assert "object=f" in calls[0]
+    assert "ids=1201%2C1202" in calls[0]
+    assert "object=e" in calls[1]
+    assert "ids=910%2C911" in calls[1]
+
+
+async def test_metadata_enricher_rejects_only_the_invalid_record_in_a_batch() -> None:
+    calls: list[str] = []
+    file_records = json.loads(_fixture("file-v1.json"))
+
+    async def fetcher(url: str) -> str:
+        calls.append(url)
+        return _fixture("edition-v1.json") if "object=e" in url else json.dumps(file_records)
+
+    enricher = LibGenMetadataEnricher(fetcher=fetcher)
+    candidates = await enricher.enrich_many(_records())
+    cached = await enricher.enrich_many(_records())
+
+    assert cached == candidates
+    assert [candidate.provider_candidate_id for candidate in candidates] == [
+        "libgen:0123456789abcdef0123456789abcdef"
+    ]
+    assert len(calls) == 2
+
+
+async def test_metadata_enricher_validates_shared_edition_for_each_file_once() -> None:
+    calls: list[str] = []
+    file_records = json.loads(_fixture("file-v1.json")) | json.loads(
+        _fixture("file-sparse-v1.json")
+    )
+    file_records["1202"]["editions"] = {"50002": {"e_id": "910"}}
+    edition_records = json.loads(_fixture("edition-v1.json"))
+    edition_records["910"]["files"]["70002"] = {"f_id": "1202"}
+
+    async def fetcher(url: str) -> str:
+        calls.append(url)
+        return json.dumps(edition_records if "object=e" in url else file_records)
+
+    enricher = LibGenMetadataEnricher(fetcher=fetcher)
+    records = _records()
+    records[1] = replace(records[1], edition_id=910)
+    candidates = await enricher.enrich_many(records)
+
+    assert len(candidates) == 2
+    assert await enricher.enrich_many(records) == candidates
+    assert len(calls) == 2
     assert "ids=910" in calls[1]
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode, urlsplit, urlunsplit
@@ -77,18 +77,7 @@ class LibGenMetadataEnricher:
 
     async def enrich(self, discovered: DiscoveredRecord) -> Candidate | None:
         origin = _source_origin(discovered.source_reference)
-        file_key = ":".join(
-            (
-                "file",
-                origin,
-                discovered.md5,
-                str(discovered.file_id or ""),
-                str(discovered.edition_id or ""),
-                str(discovered.size_bytes or ""),
-                str(discovered.size_tolerance_bytes or ""),
-                discovered.extension or "",
-            )
-        )
+        file_key = _file_cache_key(origin, discovered)
         file_lookup = self._cache.get(file_key)
         if file_lookup.hit:
             if not isinstance(file_lookup.value, FileMetadata):
@@ -105,7 +94,7 @@ class LibGenMetadataEnricher:
 
         edition_metadata: EditionMetadata | None = None
         if file_metadata.edition_id is not None:
-            edition_key = f"edition:{origin}:{file_metadata.edition_id}:{file_metadata.file_id}"
+            edition_key = _edition_cache_key(origin, file_metadata)
             edition_lookup = self._cache.get(edition_key)
             if edition_lookup.hit:
                 if isinstance(edition_lookup.value, EditionMetadata):
@@ -125,6 +114,125 @@ class LibGenMetadataEnricher:
                 else:
                     self._cache.set(edition_key, edition_metadata)
         return build_candidate(discovered, file_metadata, edition_metadata)
+
+    async def enrich_many(
+        self,
+        discovered_records: Sequence[DiscoveredRecord],
+    ) -> list[Candidate]:
+        """Enrich bounded discovery rows with batched keyed API requests."""
+        if not discovered_records:
+            return []
+        if len(discovered_records) == 1:
+            candidate = await self.enrich(discovered_records[0])
+            return [candidate] if candidate is not None else []
+
+        origins = {_source_origin(record.source_reference) for record in discovered_records}
+        if len(origins) != 1:
+            raise LibGenMetadataError("LibGen discovery records use conflicting origins.")
+        origin = origins.pop()
+        file_metadata_by_md5: dict[str, FileMetadata | None] = {}
+        pending: list[DiscoveredRecord] = []
+        individual: list[DiscoveredRecord] = []
+
+        for discovered in discovered_records:
+            file_key = _file_cache_key(origin, discovered)
+            cached = self._cache.get(file_key)
+            if cached.hit:
+                file_metadata_by_md5[discovered.md5] = (
+                    cached.value if isinstance(cached.value, FileMetadata) else None
+                )
+            elif discovered.file_id is None:
+                individual.append(discovered)
+            else:
+                pending.append(discovered)
+
+        if pending:
+            payload = await self._fetcher(
+                _file_metadata_ids_url(
+                    origin,
+                    [record.file_id for record in pending if record.file_id is not None],
+                )
+            )
+            for discovered in pending:
+                file_key = _file_cache_key(origin, discovered)
+                try:
+                    file_metadata = parse_file_metadata(payload, expected=discovered)
+                except LibGenMetadataError:
+                    self._cache.set(file_key, None)
+                    file_metadata_by_md5[discovered.md5] = None
+                else:
+                    self._cache.set(file_key, file_metadata)
+                    file_metadata_by_md5[discovered.md5] = file_metadata
+
+        edition_metadata_by_file_id: dict[int, EditionMetadata | None] = {}
+        pending_editions: list[FileMetadata] = []
+        for cached_file in file_metadata_by_md5.values():
+            if cached_file is None or cached_file.edition_id is None:
+                continue
+            edition_key = _edition_cache_key(origin, cached_file)
+            cached = self._cache.get(edition_key)
+            if cached.hit:
+                edition_metadata_by_file_id[cached_file.file_id] = (
+                    cached.value if isinstance(cached.value, EditionMetadata) else None
+                )
+            else:
+                pending_editions.append(cached_file)
+
+        if pending_editions:
+            payload = await self._fetcher(
+                _edition_metadata_ids_url(
+                    origin,
+                    [
+                        file_metadata.edition_id
+                        for file_metadata in pending_editions
+                        if file_metadata.edition_id is not None
+                    ],
+                )
+            )
+            for file_metadata in pending_editions:
+                edition_id = file_metadata.edition_id
+                if edition_id is None:
+                    continue
+                edition_key = _edition_cache_key(origin, file_metadata)
+                try:
+                    edition_metadata = parse_edition_metadata(
+                        payload,
+                        expected_edition_id=edition_id,
+                        expected_file_id=file_metadata.file_id,
+                    )
+                except LibGenMetadataError:
+                    self._cache.set(edition_key, None)
+                    edition_metadata_by_file_id[file_metadata.file_id] = None
+                else:
+                    self._cache.set(edition_key, edition_metadata)
+                    edition_metadata_by_file_id[file_metadata.file_id] = edition_metadata
+
+        candidates_by_md5: dict[str, Candidate] = {}
+        for discovered in discovered_records:
+            candidate_file = file_metadata_by_md5.get(discovered.md5)
+            if candidate_file is None:
+                continue
+            edition_metadata = (
+                edition_metadata_by_file_id.get(candidate_file.file_id)
+                if candidate_file.edition_id is not None
+                else None
+            )
+            candidates_by_md5[discovered.md5] = build_candidate(
+                discovered,
+                candidate_file,
+                edition_metadata,
+            )
+
+        for discovered in individual:
+            candidate = await self.enrich(discovered)
+            if candidate is not None:
+                candidates_by_md5[discovered.md5] = candidate
+
+        return [
+            candidates_by_md5[discovered.md5]
+            for discovered in discovered_records
+            if discovered.md5 in candidates_by_md5
+        ]
 
 
 def parse_file_metadata(payload: str | bytes, *, expected: DiscoveredRecord) -> FileMetadata:
@@ -452,6 +560,17 @@ def _file_metadata_url(origin: str, md5: str) -> str:
     return f"{origin}/json.php?{urlencode(params)}"
 
 
+def _file_metadata_ids_url(origin: str, file_ids: Sequence[int]) -> str:
+    identifiers = _bounded_identifiers(file_ids)
+    params = {
+        "object": "f",
+        "ids": ",".join(str(identifier) for identifier in identifiers),
+        "topic": "c",
+        "fields": _FILE_FIELDS,
+    }
+    return f"{origin}/json.php?{urlencode(params)}"
+
+
 def _edition_metadata_url(origin: str, edition_id: int) -> str:
     params = {
         "object": "e",
@@ -460,3 +579,40 @@ def _edition_metadata_url(origin: str, edition_id: int) -> str:
         "fields": _EDITION_FIELDS,
     }
     return f"{origin}/json.php?{urlencode(params)}"
+
+
+def _edition_metadata_ids_url(origin: str, edition_ids: Sequence[int]) -> str:
+    identifiers = _bounded_identifiers(edition_ids)
+    params = {
+        "object": "e",
+        "ids": ",".join(str(identifier) for identifier in identifiers),
+        "topic": "c",
+        "fields": _EDITION_FIELDS,
+    }
+    return f"{origin}/json.php?{urlencode(params)}"
+
+
+def _bounded_identifiers(identifiers: Sequence[int]) -> tuple[int, ...]:
+    unique = tuple(dict.fromkeys(identifiers))
+    if not unique or len(unique) > 100 or any(identifier <= 0 for identifier in unique):
+        raise LibGenMetadataError("LibGen metadata identifier batch is invalid.")
+    return unique
+
+
+def _file_cache_key(origin: str, discovered: DiscoveredRecord) -> str:
+    return ":".join(
+        (
+            "file",
+            origin,
+            discovered.md5,
+            str(discovered.file_id or ""),
+            str(discovered.edition_id or ""),
+            str(discovered.size_bytes or ""),
+            str(discovered.size_tolerance_bytes or ""),
+            discovered.extension or "",
+        )
+    )
+
+
+def _edition_cache_key(origin: str, file_metadata: FileMetadata) -> str:
+    return f"edition:{origin}:{file_metadata.edition_id}:{file_metadata.file_id}"

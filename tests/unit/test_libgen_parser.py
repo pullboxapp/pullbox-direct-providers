@@ -50,6 +50,40 @@ def test_parse_search_html_extracts_issue_and_collection_evidence() -> None:
     assert collection.pages is None
 
 
+def test_parse_search_html_extracts_compact_file_row() -> None:
+    records = parse_search_html(
+        _fixture("search-results-compact-v1.html"),
+        source_origin="https://libgen.gl",
+    )
+
+    assert len(records) == 1
+    record = records[0]
+    assert record.md5 == "0123456789abcdef0123456789abcdef"
+    assert record.source_reference == "https://libgen.gl/file.php?id=1201"
+    assert record.display_title == "Clockwork Harbor 003 (2024)"
+    assert record.raw_title == "Clockwork Harbor 003 (2024)"
+    assert record.file_id == 1201
+    assert record.edition_id is None
+    assert record.source_series_id is None
+    assert record.author is None
+    assert record.publisher is None
+    assert record.year is None
+    assert record.language is None
+    assert record.pages == 24
+    assert record.size_bytes == 18 * 1024 * 1024
+    assert record.extension == "cbz"
+
+
+def test_parse_search_html_rejects_unrecognized_compact_row_shape() -> None:
+    html = _fixture("search-results-compact-v1.html").replace(
+        'colspan="5"',
+        'colspan="4"',
+    )
+
+    with pytest.raises(LibGenLayoutError, match="layout"):
+        parse_search_html(html, source_origin="https://libgen.gl")
+
+
 def test_parse_search_html_isolates_malformed_rows_and_external_links() -> None:
     records = parse_search_html(
         _fixture("search-results-v1.html"),

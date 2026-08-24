@@ -429,13 +429,14 @@ class LibGenProviderService:
             seen: set[str] = set()
             for query in _build_queries(intent):
                 html = await session.fetch_text(_search_url(origin, query))
+                discoveries = []
                 for discovered in parse_search_html(html, source_origin=origin):
                     if discovered.md5 in seen:
                         continue
                     seen.add(discovered.md5)
-                    candidate = await enricher.enrich(discovered)
-                    if candidate is not None:
-                        candidates.append(candidate)
+                    discoveries.append(discovered)
+                for candidate in await enricher.enrich_many(discoveries):
+                    candidates.append(candidate)
                     if len(candidates) >= limit:
                         result = tuple(candidates[:limit])
                         self._search_cache.set(cache_key, result)

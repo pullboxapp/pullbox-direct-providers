@@ -50,7 +50,9 @@ class _Link:
 @dataclass(slots=True)
 class _Cell:
     tag: str
+    colspan: int = 1
     parts: list[str] = field(default_factory=list)
+    primary_parts: list[str] = field(default_factory=list)
     secondary_parts: list[str] = field(default_factory=list)
     links: list[_Link] = field(default_factory=list)
 
@@ -61,6 +63,10 @@ class _Cell:
     @property
     def secondary_text(self) -> str:
         return _normalize_text(" ".join(self.secondary_parts))
+
+    @property
+    def primary_text(self) -> str:
+        return _normalize_text(" ".join(self.primary_parts))
 
 
 @dataclass(slots=True)
@@ -93,7 +99,7 @@ class _CatalogParser(HTMLParser):
         if tag == "tr" and self._row is None:
             self._row = _Row()
         elif tag in {"td", "th"} and self._row is not None and self._cell is None:
-            self._cell = _Cell(tag=tag)
+            self._cell = _Cell(tag=tag, colspan=_cell_colspan(values.get("colspan")))
         elif tag == "a" and self._cell is not None and self._link is None:
             self._link = (values.get("href", "").strip(), [])
         elif tag == "font" and self._cell is not None:
@@ -131,6 +137,8 @@ class _CatalogParser(HTMLParser):
         self._cell.parts.append(normalized)
         if self._secondary_depth:
             self._cell.secondary_parts.append(normalized)
+        else:
+            self._cell.primary_parts.append(normalized)
         if self._link is not None:
             self._link[1].append(normalized)
 
@@ -148,9 +156,7 @@ def parse_search_html(html: str, *, source_origin: str) -> list[DiscoveredRecord
         raise LibGenLayoutError("LibGen search layout is no longer recognized.")
 
     data_rows = parser.rows[1:]
-    if data_rows and not any(
-        len(row.cells) == 9 and all(cell.tag == "td" for cell in row.cells) for row in data_rows
-    ):
+    if data_rows and not any(_is_supported_data_row(row) for row in data_rows):
         raise LibGenLayoutError("LibGen search result row layout is no longer recognized.")
 
     records: list[DiscoveredRecord] = []
@@ -168,17 +174,35 @@ def parse_search_html(html: str, *, source_origin: str) -> list[DiscoveredRecord
 
 
 def _parse_record(row: _Row, *, origin: str) -> DiscoveredRecord | None:
-    if len(row.cells) != 9 or any(cell.tag != "td" for cell in row.cells):
+    if not _is_supported_data_row(row):
         return None
-    identity, author, publisher, year, language, pages, size, extension, mirrors = row.cells
+    if len(row.cells) == 9:
+        identity, author, publisher, year, language, pages, size, extension, mirrors = row.cells
+        display_title = _display_title(identity.links)
+        raw_title = identity.secondary_text or display_title
+        author_text = _optional_text(author.text)
+        publisher_text = _optional_text(publisher.text)
+        year_value = _optional_year(year.text)
+        language_text = _optional_text(language.text)
+        edition_id = _linked_id(identity.links, path="edition.php")
+        source_series_id = _linked_id(identity.links, path="series.php")
+    else:
+        identity, pages, size, extension, mirrors = row.cells
+        display_title = identity.primary_text
+        raw_title = display_title
+        author_text = None
+        publisher_text = None
+        year_value = None
+        language_text = None
+        edition_id = None
+        source_series_id = None
+
     get_url, md5 = _get_reference(mirrors.links, origin=origin)
     if get_url is None or md5 is None:
         return None
 
     file_url, file_id = _id_reference(size.links, origin=origin, path="/file.php")
     source_reference = file_url or get_url
-    display_title = _display_title(identity.links)
-    raw_title = identity.secondary_text or display_title
     if not display_title or not raw_title:
         return None
     if len(display_title) > _MAX_TITLE_CHARS or len(raw_title) > _MAX_TITLE_CHARS:
@@ -191,17 +215,34 @@ def _parse_record(row: _Row, *, origin: str) -> DiscoveredRecord | None:
         display_title=display_title,
         raw_title=raw_title,
         file_id=file_id,
-        edition_id=_linked_id(identity.links, path="edition.php"),
-        source_series_id=_linked_id(identity.links, path="series.php"),
-        author=_optional_text(author.text),
-        publisher=_optional_text(publisher.text),
-        year=_optional_year(year.text),
-        language=_optional_text(language.text),
+        edition_id=edition_id,
+        source_series_id=source_series_id,
+        author=author_text,
+        publisher=publisher_text,
+        year=year_value,
+        language=language_text,
         pages=_optional_integer(pages.text),
         size_bytes=size_bytes,
         size_tolerance_bytes=size_tolerance_bytes,
         extension=_optional_extension(extension.text),
     )
+
+
+def _is_supported_data_row(row: _Row) -> bool:
+    if any(cell.tag != "td" for cell in row.cells):
+        return False
+    colspans = [cell.colspan for cell in row.cells]
+    return colspans == [1] * 9 or colspans == [5, 1, 1, 1, 1]
+
+
+def _cell_colspan(raw_value: str | None) -> int:
+    if raw_value is None or raw_value == "":
+        return 1
+    normalized = raw_value.strip()
+    if _POSITIVE_INTEGER.fullmatch(normalized) is None:
+        return 0
+    value = int(normalized)
+    return value if value <= 9 else 0
 
 
 def _is_header_row(row: _Row) -> bool:

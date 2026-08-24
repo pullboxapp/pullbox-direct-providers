@@ -183,6 +183,10 @@ class _SourceSession:
         if "/index.php" in url:
             return self.search_html
         if "object=f" in url:
+            if "ids=1201%2C1202" in url:
+                first = json.loads(_fixture("file-v1.json"))
+                second = json.loads(_fixture("file-sparse-v1.json"))
+                return json.dumps(first | second)
             return (
                 _fixture("file-v1.json")
                 if "0123456789abcdef0123456789abcdef" in url
@@ -278,12 +282,45 @@ async def test_service_search_discovers_enriches_deduplicates_and_caches() -> No
     assert factory.profiles == [profile]
     assert factory.sessions[0].closed is True
     assert sum("/index.php" in url for url in factory.sessions[0].urls) == 2
-    assert sum("object=f" in url for url in factory.sessions[0].urls) == 2
+    file_urls = [url for url in factory.sessions[0].urls if "object=f" in url]
+    assert len(file_urls) == 1
+    assert "ids=1201%2C1202" in file_urls[0]
+    assert "md5=" not in file_urls[0]
+    edition_urls = [url for url in factory.sessions[0].urls if "object=e" in url]
+    assert len(edition_urls) == 1
+    assert "ids=910" in edition_urls[0]
     assert all(
         factory.sessions[0].max_bytes_by_url[url] == 512 * 1024
         for url in factory.sessions[0].urls
         if "object=" in url
     )
+
+
+async def test_service_search_enriches_compact_file_row() -> None:
+    factory = _SessionFactory(
+        search_by_origin={
+            "https://libgen.gl": _fixture("search-results-compact-v1.html"),
+            "https://libgen.li": _fixture("search-results-compact-v1.html"),
+        }
+    )
+    service = LibGenProviderService(
+        session_factory=factory,
+        origin_resolver=_public_resolver,
+    )
+
+    candidates = await service.search(
+        _search_intent(),
+        provider_config={"source_url": "https://libgen.gl"},
+        limit=10,
+    )
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.provider_candidate_id == "libgen:0123456789abcdef0123456789abcdef"
+    assert candidate.display_title == "Clockwork Harbor: Signal Fires #3"
+    assert candidate.parsed.series_title == "Clockwork Harbor"
+    assert candidate.parsed.issue_numbers == ["3"]
+    assert candidate.parsed.format == "cbz"
 
 
 async def test_zero_results_are_not_misclassified_as_failover() -> None:
