@@ -158,6 +158,33 @@ async def test_recognized_challenge_calls_standard_v1_once() -> None:
     assert "not-retained" not in repr(result)
 
 
+async def test_caller_can_supply_a_narrow_provider_specific_gate_classification() -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json=_solution())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await resolve_after_challenge(
+            OrdinaryHttpResponse(
+                status_code=200,
+                headers={"server": "cloudflare"},
+                body="<title>Welcome to nginx!</title>",
+            ),
+            source_url="https://source.example/comics",
+            profile=_profile(),
+            recognized_challenge=BrowserChallengeKind.BROWSER_CHALLENGE,
+            http_client=client,
+            target_resolver=_resolve_public,
+        )
+
+    assert calls == 1
+    assert result is not None
+    assert result.challenge is BrowserChallengeKind.BROWSER_CHALLENGE
+
+
 async def test_recognized_challenge_calls_trawl_scrape_for_trawl_profile() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert str(request.url) == "http://resolver:8191/scrape"

@@ -6,6 +6,8 @@ from uuid import uuid4
 import pytest
 from pullbox_provider_contract.models import (
     PROTOCOL_VERSION,
+    Candidate,
+    ParsedCandidate,
     ResolverProfile,
     SearchIntent,
     SearchRequest,
@@ -15,12 +17,49 @@ from pydantic import ValidationError
 from tests.conftest import search_payload
 
 
+def _candidate(**overrides: object) -> Candidate:
+    values: dict[str, object] = {
+        "provider_candidate_id": "provider:item-1",
+        "source_reference": "https://source.example/item/1",
+        "display_title": "Example #1",
+        "raw_title": "Example 001 (2026).cbz",
+        "parsed": ParsedCandidate(series_title="Example", issue_numbers=["1"]),
+        "provider_confidence": 0.95,
+    }
+    values.update(overrides)
+    return Candidate.model_validate(values)
+
+
 def test_contract_accepts_additive_unknown_optional_fields() -> None:
     request = SearchRequest.model_validate(
         search_payload(future_optional_field={"provider_extension": True})
     )
 
     assert request.protocol_version == "direct-download-provider/v1"
+
+
+def test_candidate_content_fingerprint_is_optional_and_round_trips() -> None:
+    legacy = _candidate()
+    fingerprinted = _candidate(content_fingerprint="md5:0123456789abcdef0123456789abcdef")
+
+    assert legacy.content_fingerprint is None
+    assert fingerprinted.content_fingerprint == "md5:0123456789abcdef0123456789abcdef"
+    assert Candidate.model_validate_json(fingerprinted.model_dump_json()) == fingerprinted
+    assert fingerprinted.content_fingerprint not in repr(fingerprinted)
+
+
+@pytest.mark.parametrize(
+    "fingerprint",
+    [
+        "0123456789abcdef0123456789abcdef",
+        "md5:not-a-hash",
+        "md5:0123456789ABCDEF0123456789ABCDEF",
+        f"md5:{'0' * 33}",
+    ],
+)
+def test_candidate_rejects_malformed_content_fingerprint(fingerprint: str) -> None:
+    with pytest.raises(ValidationError):
+        _candidate(content_fingerprint=fingerprint)
 
 
 def test_search_intent_preserves_collection_title_and_distinct_years() -> None:

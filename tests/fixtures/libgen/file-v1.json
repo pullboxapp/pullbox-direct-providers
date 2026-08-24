@@ -1,0 +1,19 @@
+{
+  "1201": {
+    "md5": "0123456789abcdef0123456789abcdef",
+    "pages": "24",
+    "visible": "1",
+    "filesize": "18874368",
+    "extension": "cbz",
+    "locator": "c/clockwork/Clockwork Harbor 003 (2024) (Digital).cbz",
+    "broken": "0",
+    "comics_id": "410",
+    "editions": {
+      "50001": {
+        "e_id": "910",
+        "time_added": "2024-03-01 00:00:00",
+        "time_last_modified": "2024-03-02 00:00:00"
+      }
+    }
+  }
+}

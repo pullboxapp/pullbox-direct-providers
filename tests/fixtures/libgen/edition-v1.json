@@ -1,0 +1,17 @@
+{
+  "910": {
+    "title": "Clockwork Harbor",
+    "type": "c",
+    "series_name": "Clockwork Harbor",
+    "title_add": "Signal Fires",
+    "publisher": "Example Press",
+    "year": "2024",
+    "cover_url": "/covers/910.jpg",
+    "issue_number": "3",
+    "issue_volume": "",
+    "visible": "1",
+    "files": {
+      "70001": {"f_id": "1201"}
+    }
+  }
+}

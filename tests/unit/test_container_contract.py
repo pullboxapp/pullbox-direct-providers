@@ -13,6 +13,7 @@ SOURCE_DOCKERFILES = {
         ROOT / "docker" / "Dockerfile.annas-archive",
         "providers/annas_archive",
     ),
+    "libgen": (ROOT / "docker" / "Dockerfile.libgen", "providers/libgen"),
 }
 SOURCE_COMPOSE_FILE = ROOT / "docker" / "compose.providers-test.yml"
 SOURCE_SMOKE_SCRIPT = ROOT / "docker" / "provider_smoke.py"
@@ -68,8 +69,10 @@ def test_source_provider_images_are_independent_hardened_python_314_services() -
         assert "EXPOSE 8780" in dockerfile
         assert '"--port", "8780"' in dockerfile
         assert source_path in dockerfile
-        other = "annas_archive" if provider == "getcomics" else "getcomics"
-        assert f"providers/{other}" not in dockerfile
+        other_source_paths = {
+            source for other, (_path, source) in SOURCE_DOCKERFILES.items() if other != provider
+        }
+        assert all(source not in dockerfile for source in other_source_paths)
 
 
 def test_source_provider_healthchecks_test_process_liveness_without_upstream_work() -> None:
@@ -87,7 +90,7 @@ def test_source_provider_healthchecks_test_process_liveness_without_upstream_wor
 def test_source_provider_smoke_has_no_ports_mounts_or_browser_privileges() -> None:
     compose = yaml.safe_load(SOURCE_COMPOSE_FILE.read_text(encoding="utf-8"))
 
-    for service_name in ("getcomics", "annas-archive"):
+    for service_name in ("getcomics", "annas-archive", "libgen"):
         provider = compose["services"][service_name]
         assert "ports" not in provider
         assert "volumes" not in provider
@@ -101,6 +104,7 @@ def test_source_provider_smoke_has_no_ports_mounts_or_browser_privileges() -> No
     smoke = compose["services"]["smoke"]
     assert smoke["depends_on"]["getcomics"]["condition"] == "service_healthy"
     assert smoke["depends_on"]["annas-archive"]["condition"] == "service_healthy"
+    assert smoke["depends_on"]["libgen"]["condition"] == "service_healthy"
     assert "ports" not in smoke
     assert compose["networks"]["provider-test"]["internal"] is True
 

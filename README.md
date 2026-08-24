@@ -7,15 +7,19 @@ Optional, separately deployed direct-download discovery providers for
 
 This repository provides the version-one Pullbox direct-download protocol,
 Python DTO package, compatibility policy, conformance runner, synthetic
-reference provider, and the official GetComics and Anna's Archive providers.
-Production images are independently versioned, multi-architecture, scanned,
-signed, and published to GHCR and Docker Hub.
+reference provider, the official GetComics and Anna's Archive providers, and a
+release-gated LibGen community provider. Published production images are
+independently versioned, multi-architecture, scanned, signed, and available
+from GHCR and Docker Hub.
 
 ## Source Providers
 
 - GetComics: metadata discovery and stateless artifact-route normalization.
 - Anna's Archive: metadata discovery with opt-in member fast-download
   resolution; a member secret is required only by the resolve operation.
+- LibGen: bounded HTML discovery, keyed metadata enrichment, and same-source
+  generic HTTPS resolution with an editable validated source origin. Its image
+  remains independently gated until the LibGen release decision is approved.
 
 Each provider will run as an independent, stateless OCI service and implement a
 versioned, language-neutral Pullbox provider contract.
@@ -38,6 +42,7 @@ providers/
   synthetic/
   getcomics/
   annas_archive/
+  libgen/
 tests/
   conformance/
   fixtures/
@@ -66,7 +71,7 @@ coverage gate. `make docker-conformance` builds the digest-pinned synthetic
 image and proves the protocol over an internal-only Docker network.
 `make security-check` runs Bandit and a strict dependency audit.
 
-The source-provider Compose harness builds both providers, waits for
+The source-provider Compose harness builds all source providers, waits for
 process-only socket healthchecks, and validates authenticated manifests over an
 internal-only network. Process healthchecks intentionally do not call upstream
 sources. The harness uses generated test credentials and performs no live
@@ -80,7 +85,7 @@ Pull requests run four stable aggregate checks: `CI Required`,
 default permissions. The security gate includes Gitleaks, strict Python
 dependency auditing, Bandit, dependency review, and CodeQL's extended security
 queries scoped to shipped provider code. Container checks build and smoke-test
-all three runtime images, scan them with Grype, and prove Linux AMD64 and ARM64
+all four runtime images, scan them with Grype, and prove Linux AMD64 and ARM64
 builds without publishing.
 
 High and Critical findings inherited from the pinned public Python base image
@@ -126,6 +131,29 @@ the allowlisted native control types in the contract. Pullbox validates those
 controls, renders its own settings UI, and rejects provider-supplied HTML,
 JavaScript, or unknown configuration fields.
 
+### Native Provider Configuration
+
+Provider settings use a closed, documented vocabulary:
+
+- `enum` declares closed choices. The configured value must be one of the
+  declared values.
+- `x-pullbox-suggestions` declares editable HTTPS origin suggestions. A user may
+  enter another safe public HTTPS origin because the list is not an allowlist.
+- `x-pullbox-source-origin` marks a field as the provider's effective source
+  origin for provider-scoped link and browser-resolver policy.
+
+Suggestions and source-origin marking are independent controls. A provider may
+offer editable suggestions without changing its source origin, or allow a custom
+source origin without supplying suggestions. Pullbox validates suggested and
+default origins before rendering or saving them and validates the selected
+origin again before use.
+
+Search candidates may include an optional content fingerprint formatted as
+`md5:<32 lowercase hexadecimal characters>`. It must remain stable only while
+the candidate bytes are identical; changed bytes require a new fingerprint.
+Pullbox uses it only for deduplication and fallback grouping, never as a security
+or authenticity checksum, and does not treat it as durable library metadata.
+
 ## Source Provider Behavior
 
 ### GetComics
@@ -141,8 +169,8 @@ after a recognized challenge. It never downloads or proxies artifact bytes.
 The Anna's Archive provider is an explicit opt-in integration. Its configurable
 official URL accepts only `https://annas-archive.gl`,
 `https://annas-archive.pk`, or `https://annas-archive.gd`. Pullbox renders the
-field as an editable URL input with those exact choices suggested; lookalike and
-arbitrary domains remain rejected. Unattended resolution requires the user's
+field as a closed selector with those exact choices; lookalike and arbitrary
+domains remain rejected. Unattended resolution requires the user's
 member fast-download secret; free slow-download automation, CAPTCHA bypass,
 unofficial domains, and payload proxying are not supported.
 
@@ -160,6 +188,22 @@ operator-configured automatic reserve, and may continue to another already
 accepted source when Anna's Archive is unavailable. Manual grabs may use the
 reserved slots. Quota errors may include a bounded `retry_after_seconds` hint
 so Pullbox can recover automatically even without an earlier capacity report.
+
+### LibGen
+
+The LibGen provider is a separately packaged community integration. It accepts
+the documented LibGen origins as editable suggestions, validates the selected
+public HTTPS origin before every operation, and attempts ordinary HTTP before
+using a request-scoped browser resolver for a recognized source gate. Search is
+bounded to three query variants and keyed metadata enrichment; positive and
+negative caches are process-local and bounded.
+
+Candidate and artifact identity are revalidated by lowercase MD5, keyed file
+metadata, and edition relationships before a same-source public HTTPS artifact
+is returned. The MD5 is content identity and deduplication evidence, not a
+security guarantee. The provider does not proxy payload bytes, retain resolver
+cookies, expose full artifact URLs in logs, or reuse Anna's Archive links.
+Known-source failover is bounded to one alternate origin per operation.
 
 ## Deployment And Registration
 
@@ -189,6 +233,9 @@ either registry; both names resolve to the same signed digest.
 | --- | --- | --- |
 | GetComics | `ghcr.io/pullboxapp/pullbox-provider-getcomics:1.0.0` | `docker.io/pullbox/pullbox-provider-getcomics:1.0.0` |
 | Anna's Archive | `ghcr.io/pullboxapp/pullbox-provider-annas-archive:1.0.0` | `docker.io/pullbox/pullbox-provider-annas-archive:1.0.0` |
+
+LibGen image publication is intentionally omitted from this table until its
+independent release gate is approved and a numbered provider release exists.
 
 Pin a numbered version or the immutable digest in production. `latest` tracks
 only the newest stable provider release; prerelease and manual `edge` builds do

@@ -17,6 +17,7 @@ on:
         options:
           - getcomics
           - annas-archive
+          - libgen
           - synthetic
 
 permissions:
@@ -46,7 +47,7 @@ jobs:
           REQUESTED_PROVIDER: ${{ github.event.client_payload.provider || inputs.provider }}
         run: |
           case "${REQUESTED_PROVIDER}" in
-            getcomics|annas-archive|synthetic) ;;
+            getcomics|annas-archive|libgen|synthetic) ;;
             *)
               echo "::error::Unsupported provider reconciliation request: ${REQUESTED_PROVIDER}"
               exit 1

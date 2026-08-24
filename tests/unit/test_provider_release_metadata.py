@@ -31,12 +31,12 @@ def _load_latest_module():
 def test_tag_release_maps_getcomics_to_both_registry_names() -> None:
     release = _load_module().resolve_release(
         repository_owner="pullboxapp",
-        tag="getcomics-v1.0.1",
+        tag="getcomics-v1.0.2",
     )
 
     assert release.provider == "getcomics"
-    assert release.version == "1.0.1"
-    assert release.release_tag == "getcomics-v1.0.1"
+    assert release.version == "1.0.2"
+    assert release.release_tag == "getcomics-v1.0.2"
     assert release.is_release is True
     assert release.is_prerelease is False
     assert release.dockerfile == "docker/Dockerfile.getcomics"
@@ -58,6 +58,22 @@ def test_tag_release_maps_annas_archive_to_both_registry_names() -> None:
     assert release.dockerfile == "docker/Dockerfile.annas-archive"
     assert release.ghcr_image == "ghcr.io/pullboxapp/pullbox-provider-annas-archive"
     assert release.dockerhub_image == "docker.io/pullbox/pullbox-provider-annas-archive"
+
+
+def test_tag_release_maps_libgen_to_both_registry_names() -> None:
+    release = _load_module().resolve_release(
+        repository_owner="pullboxapp",
+        tag="libgen-v0.1.0",
+    )
+
+    assert release.provider == "libgen"
+    assert release.version == "0.1.0"
+    assert release.release_tag == "libgen-v0.1.0"
+    assert release.is_release is True
+    assert release.is_prerelease is False
+    assert release.dockerfile == "docker/Dockerfile.libgen"
+    assert release.ghcr_image == "ghcr.io/pullboxapp/pullbox-provider-libgen"
+    assert release.dockerhub_image == "docker.io/pullbox/pullbox-provider-libgen"
 
 
 def test_tag_release_uses_canonical_provider_prerelease(tmp_path: Path) -> None:

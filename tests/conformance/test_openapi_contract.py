@@ -58,6 +58,47 @@ def test_openapi_matches_runtime_resolver_modes_and_artifact_size_metadata() -> 
         "type": "boolean",
         "default": False,
     }
+    assert schemas["Candidate"]["properties"]["content_fingerprint"] == {
+        "type": ["string", "null"],
+        "pattern": "^md5:[0-9a-f]{32}$",
+        "description": (
+            "Optional stable provider-neutral identity for byte-identical content, using "
+            "canonical lowercase MD5 hexadecimal. Changed bytes require a new value. Used "
+            "only for deduplication and fallback grouping, never as a security checksum."
+        ),
+    }
+
+
+def test_openapi_defines_the_native_provider_configuration_vocabulary() -> None:
+    document = yaml.safe_load(SPEC_PATH.read_text(encoding="utf-8"))
+    schemas = document["components"]["schemas"]
+
+    assert schemas["ManifestResponse"]["properties"]["configuration_schema"] == {
+        "$ref": "#/components/schemas/ProviderConfigurationSchema"
+    }
+    configuration = schemas["ProviderConfigurationSchema"]
+    assert configuration["additionalProperties"] is False
+    assert configuration["properties"]["type"] == {"const": "object"}
+    assert configuration["properties"]["additionalProperties"] == {"const": False}
+    assert configuration["properties"]["properties"]["maxProperties"] == 50
+    field = schemas["ProviderConfigurationField"]
+    assert field["additionalProperties"] is False
+    assert field["properties"]["enum"]["description"].startswith("Closed choices")
+    assert field["properties"]["x-pullbox-suggestions"] == {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 20,
+        "uniqueItems": True,
+        "description": "Editable HTTPS origin suggestions; values outside the list remain valid.",
+        "items": {"type": "string", "format": "uri"},
+    }
+    assert field["properties"]["x-pullbox-source-origin"] == {
+        "type": "boolean",
+        "default": False,
+        "description": (
+            "Marks an HTTPS origin field for provider-scoped link and resolver policy."
+        ),
+    }
 
 
 def test_openapi_documents_runtime_source_and_quota_failures() -> None:

@@ -50,3 +50,15 @@ def test_canonical_fixtures_contain_no_live_hosts_or_credentials() -> None:
     assert "api_key" not in fixture_text.casefold()
     assert "authorization" not in fixture_text.casefold()
     assert "token=" not in fixture_text.casefold()
+
+
+def test_canonical_fixtures_document_lg1_additive_contracts() -> None:
+    manifest = json.loads((FIXTURE_DIR / "manifest-response.json").read_text(encoding="utf-8"))
+    search = json.loads((FIXTURE_DIR / "search-response.json").read_text(encoding="utf-8"))
+
+    source_url = manifest["configuration_schema"]["properties"]["source_url"]
+    assert source_url["x-pullbox-suggestions"] == ["https://provider.test"]
+    assert source_url["x-pullbox-source-origin"] is True
+    assert search["candidates"][0]["content_fingerprint"] == (
+        "md5:0123456789abcdef0123456789abcdef"
+    )
