@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pullbox-provider-getcomics"
-version = "1.0.1"
+version = "1.0.2"
 description = "Optional GetComics discovery provider for Pullbox"
 requires-python = ">=3.12"
 license = "GPL-3.0-or-later"
