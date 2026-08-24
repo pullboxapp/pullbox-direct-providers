@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pullbox-provider-libgen"
+version = "0.1.0"
+description = "Optional LibGen discovery provider for Pullbox"
+requires-python = ">=3.12"
+license = "GPL-3.0-or-later"
+dependencies = [
+    "pullbox-direct-provider-contract==1.0.0",
+    "uvicorn>=0.34,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pullbox_provider_libgen"]
