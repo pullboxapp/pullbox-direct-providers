@@ -243,6 +243,93 @@ async def test_service_falls_back_to_series_year_for_standard_issue_in_contiguou
     assert "Example+Heroes+2026" in urls[1]
 
 
+async def test_standard_issue_fallback_prioritizes_covering_pack_over_noncovering_results() -> None:
+    urls: list[str] = []
+
+    async def pages(url: str, **_kwargs: object) -> str:
+        urls.append(url)
+        if "Example+Heroes+7+2026" in url:
+            return """
+            <html><body><h1 class="search-title">Search Result</h1>
+              <article><h1 class="post-title">
+                <a href="https://getcomics.org/dc/example-heroes-2-2026/">
+                  Example Heroes #2 (2026)
+                </a>
+              </h1></article>
+            </body></html>
+            """
+        return """
+        <html><body><h1 class="search-title">Search Result</h1>
+          <article><h1 class="post-title">
+            <a href="https://getcomics.org/dc/example-heroes-5-10-2026/">
+              Example Heroes #5-10 (2026)
+            </a>
+          </h1></article>
+        </body></html>
+        """
+
+    service = GetComicsProviderService(page_fetcher=pages)
+    candidates = await service.search(
+        SearchIntent(
+            series_title="Example Heroes",
+            normalized_title="example heroes",
+            issue_number="7",
+            issue_type="issue",
+            year=2026,
+        ),
+        limit=1,
+    )
+
+    assert [candidate.parsed.issue_numbers for candidate in candidates] == [
+        ["5", "6", "7", "8", "9", "10"]
+    ]
+    assert len(urls) == 2
+
+
+async def test_standard_issue_fallback_ignores_unrelated_series_with_same_issue_number() -> None:
+    urls: list[str] = []
+
+    async def pages(url: str, **_kwargs: object) -> str:
+        urls.append(url)
+        if "Example+Heroes+7+2026" in url:
+            return """
+            <html><body><h1 class="search-title">Search Result</h1>
+              <article><h1 class="post-title">
+                <a href="https://getcomics.org/dc/other-heroes-7-2026/">
+                  Other Heroes #7 (2026)
+                </a>
+              </h1></article>
+            </body></html>
+            """
+        return """
+        <html><body><h1 class="search-title">Search Result</h1>
+          <article><h1 class="post-title">
+            <a href="https://getcomics.org/dc/example-heroes-5-10-2026/">
+              Example Heroes #5-10 (2026)
+            </a>
+          </h1></article>
+        </body></html>
+        """
+
+    service = GetComicsProviderService(page_fetcher=pages)
+    candidates = await service.search(
+        SearchIntent(
+            series_title="Example Heroes",
+            normalized_title="example heroes",
+            issue_number="7",
+            issue_type="issue",
+            year=2026,
+        ),
+        limit=10,
+    )
+
+    assert [candidate.parsed.issue_numbers for candidate in candidates] == [
+        ["5", "6", "7", "8", "9", "10"],
+        ["7"],
+    ]
+    assert len(urls) == 2
+
+
 async def test_service_rejects_forged_candidate_identifier() -> None:
     service = GetComicsProviderService(page_fetcher=_Pages())
 

@@ -63,22 +63,25 @@ class GetComicsProviderService:
                 seen_candidate_ids=seen_candidate_ids,
                 resolver_profile=resolver_profile,
             )
-            if len(candidates) >= limit:
+            if len(candidates) >= limit and (
+                is_collection_intent(intent.issue_type)
+                or _has_requested_issue_coverage(candidates, intent)
+            ):
                 return candidates[:limit]
 
         fallback = _standard_issue_fallback_query(intent)
-        if (
-            fallback is not None
-            and len(candidates) < limit
-            and not _has_requested_issue_coverage(candidates, intent.issue_number)
-        ):
+        if fallback is not None and not _has_requested_issue_coverage(candidates, intent):
+            fallback_candidates: list[Candidate] = []
             await self._append_search_candidates(
                 fallback,
-                candidates=candidates,
+                candidates=fallback_candidates,
                 seen_candidate_ids=seen_candidate_ids,
                 resolver_profile=resolver_profile,
             )
-        return candidates
+            # Exact queries can return unrelated releases first. Prioritize the
+            # fallback pack that explicitly covers the requested issue instead.
+            return [*fallback_candidates, *candidates][:limit]
+        return candidates[:limit]
 
     async def _append_search_candidates(
         self,
@@ -212,11 +215,37 @@ def _standard_issue_fallback_query(intent: SearchIntent) -> str | None:
 
 def _has_requested_issue_coverage(
     candidates: list[Candidate],
-    issue_number: str | None,
+    intent: SearchIntent,
 ) -> bool:
+    issue_number = intent.issue_number
     return bool(issue_number) and any(
-        issue_number in candidate.parsed.issue_numbers for candidate in candidates
+        _candidate_covers_intent(candidate, intent) for candidate in candidates
     )
+
+
+def _candidate_covers_intent(candidate: Candidate, intent: SearchIntent) -> bool:
+    """Return whether a candidate covers this issue for the requested series."""
+    if intent.issue_number not in candidate.parsed.issue_numbers:
+        return False
+    if _normalized_series_title(candidate.parsed.series_title) not in _intent_series_titles(intent):
+        return False
+    return not (
+        intent.year is not None
+        and candidate.parsed.year is not None
+        and candidate.parsed.year != intent.year
+    )
+
+
+def _intent_series_titles(intent: SearchIntent) -> set[str]:
+    return {
+        normalized
+        for title in (intent.series_title, intent.normalized_title, *intent.alternate_titles)
+        if (normalized := _normalized_series_title(title))
+    }
+
+
+def _normalized_series_title(value: str) -> str:
+    return "".join(character for character in value.casefold() if character.isalnum())
 
 
 def _candidate_url(candidate_id: str) -> str:
