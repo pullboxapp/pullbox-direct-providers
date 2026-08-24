@@ -7,9 +7,10 @@ import ipaddress
 import socket
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from pullbox_provider_contract.models import Artifact, Candidate, SearchIntent
+from pullbox_provider_contract.search_terms import collection_title_fragment, is_collection_intent
 
 if TYPE_CHECKING:
     from pullbox_provider_contract.models import ResolverProfile
@@ -113,6 +114,56 @@ def _looks_like_legacy_ipv4_literal(hostname: str) -> bool:
 async def _resolve_addresses(host: str, port: int) -> Sequence[str]:
     records = await asyncio.to_thread(socket.getaddrinfo, host, port, type=socket.SOCK_STREAM)
     return tuple(sorted({str(record[4][0]) for record in records}))
+
+
+def _build_queries(intent: SearchIntent) -> list[str]:
+    year = intent.release_year or intent.year
+    issue_or_volume = intent.volume or intent.issue_number
+    variants: list[tuple[str | int | None, ...]] = []
+    if is_collection_intent(intent.issue_type):
+        title = collection_title_fragment(intent.issue_title)
+        if title:
+            variants.append((intent.series_title, title, year))
+        if issue_or_volume:
+            variants.append((intent.series_title, "Vol", issue_or_volume, year))
+        if title:
+            variants.append((intent.series_title, title))
+        elif intent.alternate_titles:
+            variants.append((intent.alternate_titles[0], "Vol", issue_or_volume, year))
+    else:
+        variants.extend(
+            (
+                (intent.series_title, intent.issue_number, year),
+                (intent.series_title, intent.issue_number),
+            )
+        )
+        if intent.alternate_titles:
+            variants.append((intent.alternate_titles[0], intent.issue_number, year))
+
+    queries: list[str] = []
+    for parts in variants:
+        query = " ".join(" ".join(str(part).split()) for part in parts if part is not None).strip()
+        query = query[:500].rstrip()
+        if query and query not in queries:
+            queries.append(query)
+        if len(queries) == 3:
+            break
+    return queries
+
+
+def _search_url(origin: str, query: str) -> str:
+    params = urlencode(
+        [
+            ("req", query[:500]),
+            ("columns[]", "t"),
+            ("columns[]", "s"),
+            ("objects[]", "f"),
+            ("topics[]", "c"),
+            ("res", "25"),
+            ("filesuns", "all"),
+        ]
+    )
+    return f"{origin}/index.php?{params}"
 
 
 class LibGenProviderService:
