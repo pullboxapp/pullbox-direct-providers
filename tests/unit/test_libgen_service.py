@@ -312,12 +312,11 @@ async def test_service_search_discovers_enriches_deduplicates_and_caches() -> No
     ]
     assert search_queries == ["Clockwork Harbor 003 2024"]
     file_urls = [url for url in factory.sessions[0].urls if "object=f" in url]
-    assert len(file_urls) == 1
-    assert "ids=1201%2C1202" in file_urls[0]
-    assert "md5=" not in file_urls[0]
+    assert file_urls == []
     edition_urls = [url for url in factory.sessions[0].urls if "object=e" in url]
     assert edition_urls == []
-    assert all(candidate.provider_confidence == 0.75 for candidate in first)
+    assert all(candidate.provider_confidence == 0.65 for candidate in first)
+    assert all(candidate.provenance["source_kind"] == "catalog_discovery" for candidate in first)
     assert all(
         factory.sessions[0].max_bytes_by_url[url] == 512 * 1024
         for url in factory.sessions[0].urls

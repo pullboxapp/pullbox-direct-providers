@@ -31,10 +31,10 @@ from pullbox_provider_libgen.cache import BoundedTTLCache
 from pullbox_provider_libgen.metadata import (
     EditionMetadata,
     FileMetadata,
-    LibGenMetadataEnricher,
     LibGenMetadataError,
     _edition_metadata_url,
     _file_metadata_url,
+    build_discovered_candidate,
     parse_edition_metadata,
     parse_file_metadata_by_md5,
 )
@@ -235,14 +235,6 @@ class LibGenProviderService:
             ttl_seconds=10 * 60,
             negative_ttl_seconds=2 * 60,
         )
-        self._metadata_cache: BoundedTTLCache[
-            str,
-            FileMetadata | EditionMetadata,
-        ] = BoundedTTLCache(
-            max_entries=2_048,
-            ttl_seconds=60 * 60,
-            negative_ttl_seconds=2 * 60,
-        )
 
     async def source_health(self) -> dict[str, ProviderStatus]:
         health: dict[str, ProviderStatus] = {}
@@ -431,14 +423,6 @@ class LibGenProviderService:
 
         session = self._session_factory(origin, resolver_profile)
         try:
-
-            async def fetch_metadata(url: str) -> str:
-                return await session.fetch_text(url, max_bytes=_MAX_METADATA_BYTES)
-
-            enricher = LibGenMetadataEnricher(
-                fetcher=fetch_metadata,
-                cache=self._metadata_cache,
-            )
             candidates: list[Candidate] = []
             seen: set[str] = set()
 
@@ -450,11 +434,8 @@ class LibGenProviderService:
                         continue
                     seen.add(discovered.md5)
                     discoveries.append(discovered)
-                for candidate in await enricher.enrich_many(
-                    discoveries,
-                    include_editions=False,
-                ):
-                    candidates.append(candidate)
+                for discovered in discoveries:
+                    candidates.append(build_discovered_candidate(discovered))
                     if len(candidates) >= limit:
                         return True
                 return False
