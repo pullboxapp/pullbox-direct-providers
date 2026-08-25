@@ -171,6 +171,9 @@ def _build_queries(intent: SearchIntent) -> list[str]:
         elif intent.alternate_titles:
             variants.append((intent.alternate_titles[0], "Vol", issue_or_volume, year))
     else:
+        padded_issue = _zero_padded_issue_number(intent.issue_number)
+        if padded_issue and padded_issue != intent.issue_number:
+            variants.append((intent.series_title, padded_issue, year))
         variants.extend(
             (
                 (intent.series_title, intent.issue_number, year),
@@ -189,6 +192,12 @@ def _build_queries(intent: SearchIntent) -> list[str]:
         if len(queries) == 3:
             break
     return queries
+
+
+def _zero_padded_issue_number(issue_number: str | None) -> str | None:
+    if not issue_number or not issue_number.isascii() or not issue_number.isdigit():
+        return None
+    return issue_number.zfill(3)
 
 
 def _title_fallback_query(intent: SearchIntent) -> str:
@@ -449,14 +458,16 @@ class LibGenProviderService:
 
             exact_queries = _build_queries(intent)
             for query in exact_queries:
-                if await collect_query(query):
+                await collect_query(query)
+                if candidates:
                     result = tuple(candidates[:limit])
                     self._search_cache.set(cache_key, result)
                     return list(result)
 
             fallback_query = _title_fallback_query(intent)
             if not candidates and fallback_query and fallback_query not in exact_queries:
-                if await collect_query(fallback_query):
+                await collect_query(fallback_query)
+                if candidates:
                     result = tuple(candidates[:limit])
                     self._search_cache.set(cache_key, result)
                     return list(result)

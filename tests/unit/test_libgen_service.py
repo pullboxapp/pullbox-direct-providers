@@ -90,7 +90,7 @@ async def test_validate_source_origin_rejects_unresolved_or_non_public_dns(resol
         await validate_source_origin("https://libgen.example", resolver=resolver)
 
 
-def test_build_queries_is_bounded_deterministic_and_uses_one_alternate() -> None:
+def test_build_queries_is_bounded_deterministic_and_zero_pads_whole_issues() -> None:
     intent = SearchIntent(
         series_title="Clockwork Harbor",
         normalized_title="clockwork harbor",
@@ -100,9 +100,23 @@ def test_build_queries_is_bounded_deterministic_and_uses_one_alternate() -> None
     )
 
     assert _build_queries(intent) == [
+        "Clockwork Harbor 003 2024",
         "Clockwork Harbor 3 2024",
         "Clockwork Harbor 3",
-        "The Clockwork Harbor 3 2024",
+    ]
+
+
+def test_build_queries_does_not_pad_non_integer_issue_numbers() -> None:
+    intent = SearchIntent(
+        series_title="Clockwork Harbor",
+        normalized_title="clockwork harbor",
+        issue_number="3.1",
+        year=2024,
+    )
+
+    assert _build_queries(intent) == [
+        "Clockwork Harbor 3.1 2024",
+        "Clockwork Harbor 3.1",
     ]
 
 
@@ -291,7 +305,12 @@ async def test_service_search_discovers_enriches_deduplicates_and_caches() -> No
     assert len(factory.sessions) == 1
     assert factory.profiles == [profile]
     assert factory.sessions[0].closed is True
-    assert sum("/index.php" in url for url in factory.sessions[0].urls) == 2
+    search_queries = [
+        parse_qs(urlsplit(url).query)["req"][0]
+        for url in factory.sessions[0].urls
+        if "/index.php" in url
+    ]
+    assert search_queries == ["Clockwork Harbor 003 2024"]
     file_urls = [url for url in factory.sessions[0].urls if "object=f" in url]
     assert len(file_urls) == 1
     assert "ids=1201%2C1202" in file_urls[0]
@@ -353,6 +372,7 @@ async def test_zero_results_are_not_misclassified_as_failover() -> None:
 async def test_search_uses_title_only_fallback_after_exact_queries_return_no_candidates() -> None:
     factory = _SessionFactory(
         search_by_query={
+            "Clockwork Harbor 003 2024": _fixture("search-zero-v1.html"),
             "Clockwork Harbor 3 2024": _fixture("search-zero-v1.html"),
             "Clockwork Harbor 3": _fixture("search-zero-v1.html"),
             "Clockwork Harbor": _fixture("search-results-v1.html"),
@@ -376,6 +396,7 @@ async def test_search_uses_title_only_fallback_after_exact_queries_return_no_can
         if "/index.php" in url
     ]
     assert search_queries == [
+        "Clockwork Harbor 003 2024",
         "Clockwork Harbor 3 2024",
         "Clockwork Harbor 3",
         "Clockwork Harbor",
