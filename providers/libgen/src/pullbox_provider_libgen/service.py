@@ -191,6 +191,10 @@ def _build_queries(intent: SearchIntent) -> list[str]:
     return queries
 
 
+def _title_fallback_query(intent: SearchIntent) -> str:
+    return " ".join(intent.series_title.split())[:500].rstrip()
+
+
 def _search_url(origin: str, query: str) -> str:
     params = urlencode(
         [
@@ -428,7 +432,8 @@ class LibGenProviderService:
             )
             candidates: list[Candidate] = []
             seen: set[str] = set()
-            for query in _build_queries(intent):
+
+            async def collect_query(query: str) -> bool:
                 html = await session.fetch_text(_search_url(origin, query))
                 discoveries = []
                 for discovered in parse_search_html(html, source_origin=origin):
@@ -439,9 +444,22 @@ class LibGenProviderService:
                 for candidate in await enricher.enrich_many(discoveries):
                     candidates.append(candidate)
                     if len(candidates) >= limit:
-                        result = tuple(candidates[:limit])
-                        self._search_cache.set(cache_key, result)
-                        return list(result)
+                        return True
+                return False
+
+            exact_queries = _build_queries(intent)
+            for query in exact_queries:
+                if await collect_query(query):
+                    result = tuple(candidates[:limit])
+                    self._search_cache.set(cache_key, result)
+                    return list(result)
+
+            fallback_query = _title_fallback_query(intent)
+            if not candidates and fallback_query and fallback_query not in exact_queries:
+                if await collect_query(fallback_query):
+                    result = tuple(candidates[:limit])
+                    self._search_cache.set(cache_key, result)
+                    return list(result)
             result = tuple(candidates[:limit])
             self._search_cache.set(cache_key, result or None)
             return list(result)

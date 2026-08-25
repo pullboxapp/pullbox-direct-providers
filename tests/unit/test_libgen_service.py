@@ -164,11 +164,13 @@ class _SourceSession:
         origin: str,
         *,
         search_html: str | None = None,
+        search_by_query: dict[str, str] | None = None,
         fail: BaseException | None = None,
         redirect_fail: BaseException | None = None,
     ) -> None:
         self.origin = origin
         self.search_html = search_html or _fixture("search-results-v1.html")
+        self.search_by_query = search_by_query or {}
         self.fail = fail
         self.redirect_fail = redirect_fail
         self.urls: list[str] = []
@@ -181,6 +183,9 @@ class _SourceSession:
         if self.fail is not None:
             raise self.fail
         if "/index.php" in url:
+            query = parse_qs(urlsplit(url).query).get("req", [""])[0]
+            if query in self.search_by_query:
+                return self.search_by_query[query]
             return self.search_html
         if "object=f" in url:
             if "ids=1201%2C1202" in url:
@@ -215,10 +220,12 @@ class _SessionFactory:
         self,
         *,
         search_by_origin: dict[str, str] | None = None,
+        search_by_query: dict[str, str] | None = None,
         failure_by_origin: dict[str, BaseException] | None = None,
         redirect_failure_by_origin: dict[str, BaseException] | None = None,
     ) -> None:
         self.search_by_origin = search_by_origin or {}
+        self.search_by_query = search_by_query or {}
         self.failure_by_origin = failure_by_origin or {}
         self.redirect_failure_by_origin = redirect_failure_by_origin or {}
         self.sessions: list[_SourceSession] = []
@@ -232,6 +239,7 @@ class _SessionFactory:
         session = _SourceSession(
             origin,
             search_html=self.search_by_origin.get(origin),
+            search_by_query=self.search_by_query,
             fail=self.failure_by_origin.get(origin),
             redirect_fail=self.redirect_failure_by_origin.get(origin),
         )
@@ -340,6 +348,57 @@ async def test_zero_results_are_not_misclassified_as_failover() -> None:
         == []
     )
     assert [session.origin for session in factory.sessions] == ["https://libgen.gl"]
+
+
+async def test_search_uses_title_only_fallback_after_exact_queries_return_no_candidates() -> None:
+    factory = _SessionFactory(
+        search_by_query={
+            "Clockwork Harbor 3 2024": _fixture("search-zero-v1.html"),
+            "Clockwork Harbor 3": _fixture("search-zero-v1.html"),
+            "Clockwork Harbor": _fixture("search-results-v1.html"),
+        }
+    )
+    service = LibGenProviderService(session_factory=factory, origin_resolver=_public_resolver)
+
+    candidates = await service.search(
+        _search_intent(),
+        provider_config={"source_url": "https://libgen.gl"},
+        limit=10,
+    )
+
+    assert [candidate.provider_candidate_id for candidate in candidates] == [
+        "libgen:0123456789abcdef0123456789abcdef",
+        "libgen:fedcba9876543210fedcba9876543210",
+    ]
+    search_queries = [
+        parse_qs(urlsplit(url).query)["req"][0]
+        for url in factory.sessions[0].urls
+        if "/index.php" in url
+    ]
+    assert search_queries == [
+        "Clockwork Harbor 3 2024",
+        "Clockwork Harbor 3",
+        "Clockwork Harbor",
+    ]
+
+
+async def test_search_skips_title_only_fallback_when_exact_queries_find_candidates() -> None:
+    factory = _SessionFactory()
+    service = LibGenProviderService(session_factory=factory, origin_resolver=_public_resolver)
+
+    candidates = await service.search(
+        _search_intent(),
+        provider_config={"source_url": "https://libgen.gl"},
+        limit=10,
+    )
+
+    assert len(candidates) == 2
+    search_queries = [
+        parse_qs(urlsplit(url).query)["req"][0]
+        for url in factory.sessions[0].urls
+        if "/index.php" in url
+    ]
+    assert "Clockwork Harbor" not in search_queries
 
 
 async def test_search_fails_over_once_for_temporary_source_failure() -> None:
