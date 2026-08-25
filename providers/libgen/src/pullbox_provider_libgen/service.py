@@ -12,6 +12,7 @@ from typing import Protocol
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import structlog
+from pullbox_provider_contract.comic_parser import parse_comic_title
 from pullbox_provider_contract.models import (
     Artifact,
     ArtifactCoverage,
@@ -471,14 +472,10 @@ class LibGenProviderService:
                 expected_file_id=file_metadata.file_id,
             )
         destination = await session.resolve_redirect(f"{origin}/get.php?md5={md5}")
-        issue_numbers = [edition.issue_number] if edition and edition.issue_number else []
+        coverage = _resolved_coverage(file_metadata, edition)
         return Artifact(
             artifact_id=f"libgen-direct:{md5}",
-            coverage=ArtifactCoverage(
-                issue_numbers=issue_numbers,
-                volume=edition.issue_volume if edition else None,
-                description=(edition.series_name or edition.title) if edition else None,
-            ),
+            coverage=coverage,
             route=ArtifactRoute.DIRECT_ARTIFACT,
             format=file_metadata.extension,
             edition=edition.edition_type if edition else None,
@@ -493,6 +490,41 @@ class LibGenProviderService:
                 )
             ],
         )
+
+
+def _resolved_coverage(
+    file_metadata: FileMetadata,
+    edition: EditionMetadata | None,
+) -> ArtifactCoverage:
+    """Build coverage from edition metadata or the MD5-bound locator filename."""
+    locator = file_metadata.locator_filename
+    locator_evidence = parse_comic_title(locator) if locator else None
+    issue_numbers = (
+        [edition.issue_number]
+        if edition is not None and edition.issue_number
+        else list(locator_evidence.issue_numbers)
+        if locator_evidence is not None
+        else []
+    )
+    volume = (
+        edition.issue_volume
+        if edition is not None and edition.issue_volume
+        else locator_evidence.volume
+        if locator_evidence is not None
+        else None
+    )
+    description = (
+        edition.series_name or edition.title
+        if edition is not None
+        else locator_evidence.series_title
+        if locator_evidence is not None
+        else None
+    )
+    return ArtifactCoverage(
+        issue_numbers=issue_numbers,
+        volume=volume,
+        description=description,
+    )
 
 
 def _candidate_md5(provider_candidate_id: str) -> str:

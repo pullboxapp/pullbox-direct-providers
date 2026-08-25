@@ -187,6 +187,8 @@ class _SourceSession:
                 first = json.loads(_fixture("file-v1.json"))
                 second = json.loads(_fixture("file-sparse-v1.json"))
                 return json.dumps(first | second)
+            if "11111111111111111111111111111111" in url:
+                return _fixture("file-standard-no-edition-v1.json")
             return (
                 _fixture("file-v1.json")
                 if "0123456789abcdef0123456789abcdef" in url
@@ -386,6 +388,22 @@ async def test_resolve_revalidates_by_md5_and_returns_generic_https_artifact() -
     assert artifact.mirrors[0].final_url == "https://downloads.example/clockwork-harbor-003.cbz"
     assert artifact.mirrors[0].checksum == "md5:0123456789abcdef0123456789abcdef"
     assert factory.sessions[0].closed is True
+
+
+async def test_resolve_uses_md5_bound_locator_coverage_without_an_edition() -> None:
+    factory = _SessionFactory()
+    service = LibGenProviderService(session_factory=factory, origin_resolver=_public_resolver)
+
+    artifacts = await service.resolve(
+        "libgen:11111111111111111111111111111111",
+        provider_config={"source_url": "https://libgen.gl"},
+    )
+
+    assert len(artifacts) == 1
+    artifact = artifacts[0]
+    assert artifact.coverage.issue_numbers == ["22"]
+    assert artifact.coverage.volume is None
+    assert artifact.coverage.description == "Absolute Batman"
 
 
 @pytest.mark.parametrize(

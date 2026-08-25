@@ -18,7 +18,9 @@ _HASH_RANGE = re.compile(
     rf"(?P<end>\d+(?:\.\d+)?){_TRAILING_RELEASE_LABELS}\s*$"
 )
 _HASH_ISSUE = re.compile(rf"\s+#\s*(?P<issue>\d+(?:\.\d+)?[A-Za-z]?){_TRAILING_RELEASE_LABELS}\s*$")
-_TRAILING_ISSUE = re.compile(r"\s+(?P<issue>\d{1,5}(?:\.\d+)?[A-Za-z]?)\s*$")
+_TRAILING_ISSUE = re.compile(
+    rf"\s+(?P<issue>\d{{1,5}}(?:\.\d+)?[A-Za-z]?){_TRAILING_RELEASE_LABELS}\s*$"
+)
 _SCENE_NO_ISSUE = re.compile(
     r"^(?:(?P<group>[a-z][a-z0-9]{1,15})-(?P<group_series>[A-Z].+?)|(?P<series>.+?))"
     r"[._\s]+(?i:No)\.?[._\s]*(?P<issue>\d{1,5}(?:\.\d+)?[A-Za-z]?)\s*$"
