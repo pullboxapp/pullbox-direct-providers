@@ -75,7 +75,12 @@ class LibGenMetadataEnricher:
             negative_ttl_seconds=2 * 60,
         )
 
-    async def enrich(self, discovered: DiscoveredRecord) -> Candidate | None:
+    async def enrich(
+        self,
+        discovered: DiscoveredRecord,
+        *,
+        include_edition: bool = True,
+    ) -> Candidate | None:
         origin = _source_origin(discovered.source_reference)
         file_key = _file_cache_key(origin, discovered)
         file_lookup = self._cache.get(file_key)
@@ -93,7 +98,7 @@ class LibGenMetadataEnricher:
             self._cache.set(file_key, file_metadata)
 
         edition_metadata: EditionMetadata | None = None
-        if file_metadata.edition_id is not None:
+        if include_edition and file_metadata.edition_id is not None:
             edition_key = _edition_cache_key(origin, file_metadata)
             edition_lookup = self._cache.get(edition_key)
             if edition_lookup.hit:
@@ -118,12 +123,17 @@ class LibGenMetadataEnricher:
     async def enrich_many(
         self,
         discovered_records: Sequence[DiscoveredRecord],
+        *,
+        include_editions: bool = True,
     ) -> list[Candidate]:
         """Enrich bounded discovery rows with batched keyed API requests."""
         if not discovered_records:
             return []
         if len(discovered_records) == 1:
-            candidate = await self.enrich(discovered_records[0])
+            candidate = await self.enrich(
+                discovered_records[0],
+                include_edition=include_editions,
+            )
             return [candidate] if candidate is not None else []
 
         origins = {_source_origin(record.source_reference) for record in discovered_records}
@@ -167,6 +177,8 @@ class LibGenMetadataEnricher:
         edition_metadata_by_file_id: dict[int, EditionMetadata | None] = {}
         pending_editions: list[FileMetadata] = []
         for cached_file in file_metadata_by_md5.values():
+            if not include_editions:
+                continue
             if cached_file is None or cached_file.edition_id is None:
                 continue
             edition_key = _edition_cache_key(origin, cached_file)
@@ -224,7 +236,10 @@ class LibGenMetadataEnricher:
             )
 
         for discovered in individual:
-            candidate = await self.enrich(discovered)
+            candidate = await self.enrich(
+                discovered,
+                include_edition=include_editions,
+            )
             if candidate is not None:
                 candidates_by_md5[discovered.md5] = candidate
 

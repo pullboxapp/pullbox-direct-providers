@@ -450,7 +450,10 @@ class LibGenProviderService:
                         continue
                     seen.add(discovered.md5)
                     discoveries.append(discovered)
-                for candidate in await enricher.enrich_many(discoveries):
+                for candidate in await enricher.enrich_many(
+                    discoveries,
+                    include_editions=False,
+                ):
                     candidates.append(candidate)
                     if len(candidates) >= limit:
                         return True

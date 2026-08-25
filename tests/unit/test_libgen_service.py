@@ -316,8 +316,8 @@ async def test_service_search_discovers_enriches_deduplicates_and_caches() -> No
     assert "ids=1201%2C1202" in file_urls[0]
     assert "md5=" not in file_urls[0]
     edition_urls = [url for url in factory.sessions[0].urls if "object=e" in url]
-    assert len(edition_urls) == 1
-    assert "ids=910" in edition_urls[0]
+    assert edition_urls == []
+    assert all(candidate.provider_confidence == 0.75 for candidate in first)
     assert all(
         factory.sessions[0].max_bytes_by_url[url] == 512 * 1024
         for url in factory.sessions[0].urls
@@ -346,7 +346,8 @@ async def test_service_search_enriches_compact_file_row() -> None:
     assert len(candidates) == 1
     candidate = candidates[0]
     assert candidate.provider_candidate_id == "libgen:0123456789abcdef0123456789abcdef"
-    assert candidate.display_title == "Clockwork Harbor: Signal Fires #3"
+    assert candidate.display_title == "Clockwork Harbor 003 (2024)"
+    assert candidate.parsed.issue_numbers == ["3"]
     assert candidate.parsed.series_title == "Clockwork Harbor"
     assert candidate.parsed.issue_numbers == ["3"]
     assert candidate.parsed.format == "cbz"
