@@ -12,6 +12,7 @@ from typing import Protocol
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import structlog
+from pullbox_provider_contract.comic_parser import parse_comic_title
 from pullbox_provider_contract.models import (
     Artifact,
     ArtifactCoverage,
@@ -30,10 +31,10 @@ from pullbox_provider_libgen.cache import BoundedTTLCache
 from pullbox_provider_libgen.metadata import (
     EditionMetadata,
     FileMetadata,
-    LibGenMetadataEnricher,
     LibGenMetadataError,
     _edition_metadata_url,
     _file_metadata_url,
+    build_discovered_candidate,
     parse_edition_metadata,
     parse_file_metadata_by_md5,
 )
@@ -170,6 +171,9 @@ def _build_queries(intent: SearchIntent) -> list[str]:
         elif intent.alternate_titles:
             variants.append((intent.alternate_titles[0], "Vol", issue_or_volume, year))
     else:
+        padded_issue = _zero_padded_issue_number(intent.issue_number)
+        if padded_issue and padded_issue != intent.issue_number:
+            variants.append((intent.series_title, padded_issue, year))
         variants.extend(
             (
                 (intent.series_title, intent.issue_number, year),
@@ -188,6 +192,16 @@ def _build_queries(intent: SearchIntent) -> list[str]:
         if len(queries) == 3:
             break
     return queries
+
+
+def _zero_padded_issue_number(issue_number: str | None) -> str | None:
+    if not issue_number or not issue_number.isascii() or not issue_number.isdigit():
+        return None
+    return issue_number.zfill(3)
+
+
+def _title_fallback_query(intent: SearchIntent) -> str:
+    return " ".join(intent.series_title.split())[:500].rstrip()
 
 
 def _search_url(origin: str, query: str) -> str:
@@ -219,14 +233,6 @@ class LibGenProviderService:
         self._search_cache: BoundedTTLCache[str, tuple[Candidate, ...]] = BoundedTTLCache(
             max_entries=512,
             ttl_seconds=10 * 60,
-            negative_ttl_seconds=2 * 60,
-        )
-        self._metadata_cache: BoundedTTLCache[
-            str,
-            FileMetadata | EditionMetadata,
-        ] = BoundedTTLCache(
-            max_entries=2_048,
-            ttl_seconds=60 * 60,
             negative_ttl_seconds=2 * 60,
         )
 
@@ -417,29 +423,38 @@ class LibGenProviderService:
 
         session = self._session_factory(origin, resolver_profile)
         try:
-
-            async def fetch_metadata(url: str) -> str:
-                return await session.fetch_text(url, max_bytes=_MAX_METADATA_BYTES)
-
-            enricher = LibGenMetadataEnricher(
-                fetcher=fetch_metadata,
-                cache=self._metadata_cache,
-            )
             candidates: list[Candidate] = []
             seen: set[str] = set()
-            for query in _build_queries(intent):
+
+            async def collect_query(query: str) -> bool:
                 html = await session.fetch_text(_search_url(origin, query))
+                discoveries = []
                 for discovered in parse_search_html(html, source_origin=origin):
                     if discovered.md5 in seen:
                         continue
                     seen.add(discovered.md5)
-                    candidate = await enricher.enrich(discovered)
-                    if candidate is not None:
-                        candidates.append(candidate)
+                    discoveries.append(discovered)
+                for discovered in discoveries:
+                    candidates.append(build_discovered_candidate(discovered))
                     if len(candidates) >= limit:
-                        result = tuple(candidates[:limit])
-                        self._search_cache.set(cache_key, result)
-                        return list(result)
+                        return True
+                return False
+
+            exact_queries = _build_queries(intent)
+            for query in exact_queries:
+                await collect_query(query)
+                if candidates:
+                    result = tuple(candidates[:limit])
+                    self._search_cache.set(cache_key, result)
+                    return list(result)
+
+            fallback_query = _title_fallback_query(intent)
+            if not candidates and fallback_query and fallback_query not in exact_queries:
+                await collect_query(fallback_query)
+                if candidates:
+                    result = tuple(candidates[:limit])
+                    self._search_cache.set(cache_key, result)
+                    return list(result)
             result = tuple(candidates[:limit])
             self._search_cache.set(cache_key, result or None)
             return list(result)
@@ -470,14 +485,10 @@ class LibGenProviderService:
                 expected_file_id=file_metadata.file_id,
             )
         destination = await session.resolve_redirect(f"{origin}/get.php?md5={md5}")
-        issue_numbers = [edition.issue_number] if edition and edition.issue_number else []
+        coverage = _resolved_coverage(file_metadata, edition)
         return Artifact(
             artifact_id=f"libgen-direct:{md5}",
-            coverage=ArtifactCoverage(
-                issue_numbers=issue_numbers,
-                volume=edition.issue_volume if edition else None,
-                description=(edition.series_name or edition.title) if edition else None,
-            ),
+            coverage=coverage,
             route=ArtifactRoute.DIRECT_ARTIFACT,
             format=file_metadata.extension,
             edition=edition.edition_type if edition else None,
@@ -492,6 +503,41 @@ class LibGenProviderService:
                 )
             ],
         )
+
+
+def _resolved_coverage(
+    file_metadata: FileMetadata,
+    edition: EditionMetadata | None,
+) -> ArtifactCoverage:
+    """Build coverage from edition metadata or the MD5-bound locator filename."""
+    locator = file_metadata.locator_filename
+    locator_evidence = parse_comic_title(locator) if locator else None
+    issue_numbers = (
+        [edition.issue_number]
+        if edition is not None and edition.issue_number
+        else list(locator_evidence.issue_numbers)
+        if locator_evidence is not None
+        else []
+    )
+    volume = (
+        edition.issue_volume
+        if edition is not None and edition.issue_volume
+        else locator_evidence.volume
+        if locator_evidence is not None
+        else None
+    )
+    description = (
+        edition.series_name or edition.title
+        if edition is not None
+        else locator_evidence.series_title
+        if locator_evidence is not None
+        else None
+    )
+    return ArtifactCoverage(
+        issue_numbers=issue_numbers,
+        volume=volume,
+        description=description,
+    )
 
 
 def _candidate_md5(provider_candidate_id: str) -> str:

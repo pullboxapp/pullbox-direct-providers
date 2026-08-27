@@ -64,21 +64,25 @@ class GetComicsProviderService:
                 seen_candidate_ids=seen_candidate_ids,
                 resolver_profile=resolver_profile,
             )
-            if len(candidates) >= limit and (
-                is_collection_intent(intent.issue_type)
-                or _has_requested_issue_coverage(candidates, intent)
+            if not is_collection_intent(intent.issue_type) and _has_requested_issue_coverage(
+                candidates, intent
             ):
+                return _prioritize_requested_issue_coverage(candidates, intent)[:limit]
+            if len(candidates) >= limit and is_collection_intent(intent.issue_type):
                 return candidates[:limit]
 
-        fallback = _standard_issue_fallback_query(intent)
-        if fallback is not None and not _has_requested_issue_coverage(candidates, intent):
+        fallbacks = _standard_issue_fallback_queries(intent)
+        if fallbacks and not _has_requested_issue_coverage(candidates, intent):
             fallback_candidates: list[Candidate] = []
-            await self._append_search_candidates(
-                fallback,
-                candidates=fallback_candidates,
-                seen_candidate_ids=seen_candidate_ids,
-                resolver_profile=resolver_profile,
-            )
+            for fallback in fallbacks:
+                await self._append_search_candidates(
+                    fallback,
+                    candidates=fallback_candidates,
+                    seen_candidate_ids=seen_candidate_ids,
+                    resolver_profile=resolver_profile,
+                )
+                if _has_requested_issue_coverage(fallback_candidates, intent):
+                    break
             # Exact queries can return unrelated releases first. Prioritize only
             # fallback packs that explicitly cover the requested issue; broad
             # fallback noise must not displace a targeted exact-search result.
@@ -174,9 +178,12 @@ def _build_query(intent: SearchIntent) -> str:
 
 
 def _build_queries(intent: SearchIntent) -> list[str]:
+    if not is_collection_intent(intent.issue_type):
+        return _standard_issue_exact_queries(intent)
+
     title_fragment = collection_title_fragment(intent.issue_title)
     explicit_title_volume = collection_title_number(intent.issue_title)
-    if not is_collection_intent(intent.issue_type) or title_fragment is None:
+    if title_fragment is None:
         queries = [_build_query(intent)]
     else:
         queries = [f"{intent.series_title} {title_fragment}"[:700]]
@@ -215,14 +222,44 @@ def _build_queries(intent: SearchIntent) -> list[str]:
     return queries[:5]
 
 
-def _standard_issue_fallback_query(intent: SearchIntent) -> str | None:
-    """Return one bounded range-pack fallback after an exact issue search misses."""
+def _standard_issue_exact_queries(intent: SearchIntent) -> list[str]:
+    """Return release-aware exact queries without losing legacy year behavior."""
+    if not intent.issue_number:
+        return [_build_query(intent)]
+
+    base = f"{intent.series_title} {intent.issue_number}"
+    queries: list[str] = []
+    preferred_year = intent.release_year
+    if preferred_year is None and intent.series_year is None:
+        preferred_year = intent.year
+    if preferred_year is not None:
+        queries.append(f"{base} {preferred_year}"[:700])
+    queries.append(base[:700])
+
+    compatibility_year = intent.series_year or intent.year
+    if compatibility_year is not None:
+        queries.append(f"{base} {compatibility_year}"[:700])
+    return list(dict.fromkeys(queries))[:3]
+
+
+def _standard_issue_fallback_queries(intent: SearchIntent) -> list[str]:
+    """Return bounded release-year and series-year range-pack fallbacks."""
     if is_collection_intent(intent.issue_type) or not intent.issue_number:
-        return None
-    parts = [intent.series_title]
-    if intent.year:
-        parts.append(str(intent.year))
-    return " ".join(parts)[:700]
+        return []
+
+    years: list[int] = []
+    preferred_year = intent.release_year
+    if preferred_year is None and intent.series_year is None:
+        preferred_year = intent.year
+    if preferred_year is not None:
+        years.append(preferred_year)
+    compatibility_year = intent.series_year or intent.year
+    if compatibility_year is not None:
+        years.append(compatibility_year)
+    unique_years = list(dict.fromkeys(years))
+    if not unique_years:
+        return [intent.series_title[:700]]
+    return [f"{intent.series_title} {year}"[:700] for year in unique_years[:2]]
 
 
 def _has_requested_issue_coverage(
@@ -235,6 +272,20 @@ def _has_requested_issue_coverage(
     )
 
 
+def _prioritize_requested_issue_coverage(
+    candidates: list[Candidate],
+    intent: SearchIntent,
+) -> list[Candidate]:
+    """Keep a later exact query from being displaced by earlier search noise."""
+    covering = [
+        candidate for candidate in candidates if _candidate_covers_intent(candidate, intent)
+    ]
+    noncovering = [
+        candidate for candidate in candidates if not _candidate_covers_intent(candidate, intent)
+    ]
+    return [*covering, *noncovering]
+
+
 def _candidate_covers_intent(candidate: Candidate, intent: SearchIntent) -> bool:
     """Return whether a candidate covers this issue for the requested series."""
     if intent.issue_number is None:
@@ -243,10 +294,13 @@ def _candidate_covers_intent(candidate: Candidate, intent: SearchIntent) -> bool
         return False
     if _normalized_series_title(candidate.parsed.series_title) not in _intent_series_titles(intent):
         return False
+    expected_years = {
+        year for year in (intent.release_year, intent.series_year, intent.year) if year is not None
+    }
     return not (
-        intent.year is not None
+        expected_years
         and candidate.parsed.year is not None
-        and candidate.parsed.year != intent.year
+        and candidate.parsed.year not in expected_years
     )
 
 
