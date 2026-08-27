@@ -1,6 +1,15 @@
-ARG PYTHON_BASE=python:3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6
+ARG PYTHON_BASE=python:3.14-slim@sha256:83ff1d245a3d57d04152252d3ef9cb361494d0b3395abd65a5ebe91c401c8e83
 
-FROM ${PYTHON_BASE} AS build
+FROM ${PYTHON_BASE} AS security-patched
+
+RUN apt-get update && \
+    apt-get install --yes --no-install-recommends \
+        libssl3t64=3.5.7-1~deb13u2 \
+        openssl=3.5.7-1~deb13u2 \
+        openssl-provider-legacy=3.5.7-1~deb13u2 && \
+    rm -rf /var/lib/apt/lists/*
+
+FROM security-patched AS build
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1
@@ -13,7 +22,7 @@ COPY providers/synthetic providers/synthetic
 
 RUN python -m pip wheel --wheel-dir /wheels .
 
-FROM ${PYTHON_BASE} AS runtime
+FROM security-patched AS runtime
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -32,7 +41,7 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
 ENTRYPOINT ["python", "-m", "uvicorn"]
 CMD ["pullbox_provider_synthetic.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8780", "--no-access-log"]
 
-FROM ${PYTHON_BASE} AS conformance
+FROM security-patched AS conformance
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \

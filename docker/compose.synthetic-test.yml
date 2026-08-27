@@ -5,7 +5,7 @@ services:
       dockerfile: docker/Dockerfile.synthetic
       target: runtime
       args:
-        PYTHON_BASE: ${PYTHON_BASE:-mirror.gcr.io/library/python:3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6}
+        PYTHON_BASE: ${PYTHON_BASE:-mirror.gcr.io/library/python:3.14-slim@sha256:83ff1d245a3d57d04152252d3ef9cb361494d0b3395abd65a5ebe91c401c8e83}
     image: pullbox-provider-synthetic:dd0-test
     environment:
       PULLBOX_PROVIDER_TOKEN: ${PULLBOX_PROVIDER_TOKEN:-synthetic-conformance-token-00000000}
@@ -26,7 +26,7 @@ services:
       dockerfile: docker/Dockerfile.synthetic
       target: conformance
       args:
-        PYTHON_BASE: ${PYTHON_BASE:-mirror.gcr.io/library/python:3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6}
+        PYTHON_BASE: ${PYTHON_BASE:-mirror.gcr.io/library/python:3.14-slim@sha256:83ff1d245a3d57d04152252d3ef9cb361494d0b3395abd65a5ebe91c401c8e83}
     environment:
       PULLBOX_PROVIDER_BASE_URL: http://synthetic:8780
       PULLBOX_PROVIDER_TOKEN: ${PULLBOX_PROVIDER_TOKEN:-synthetic-conformance-token-00000000}
