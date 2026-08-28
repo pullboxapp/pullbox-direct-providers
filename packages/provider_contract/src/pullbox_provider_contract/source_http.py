@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 _MAX_SOURCE_BYTES = 8 * 1024 * 1024
 _MAX_REDIRECT_URL_LENGTH = 4_000
 _REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
+_MAX_SOURCE_REDIRECTS = 1
 
 BrowserResolver = Callable[..., Awaitable[ProviderResolverOutcome | None]]
 
@@ -62,19 +63,37 @@ async def fetch_source_html(
     response: httpx.Response | None = None
     try:
         try:
-            response = await client.send(
-                client.build_request("GET", safe_url, headers={"Accept": "text/html"}),
-                stream=True,
-                follow_redirects=False,
-            )
-            body = await _read_bounded(response)
+            for redirect_count in range(_MAX_SOURCE_REDIRECTS + 1):
+                response = await client.send(
+                    client.build_request("GET", safe_url, headers={"Accept": "text/html"}),
+                    stream=True,
+                    follow_redirects=False,
+                )
+                if response.status_code not in _REDIRECT_STATUS_CODES:
+                    body = await _read_bounded(response)
+                    break
+                if redirect_count >= _MAX_SOURCE_REDIRECTS:
+                    raise RuntimeError("Source redirect limit was exceeded.")
+                redirected_url = _same_origin_source_redirect(
+                    safe_url,
+                    response.headers.get("location"),
+                )
+                await response.aclose()
+                response = None
+                safe_url = await _validate_source_url(
+                    redirected_url,
+                    declared_domains,
+                    resolver=target_resolver,
+                )
+            else:  # pragma: no cover - bounded loop always returns or raises
+                raise RuntimeError("Source redirect limit was exceeded.")
         except asyncio.CancelledError:
             raise
         except (httpx.HTTPError, TimeoutError) as exc:
             raise RuntimeError("Source request is temporarily unavailable.") from exc
 
-        if response.status_code in {301, 302, 303, 307, 308}:
-            raise RuntimeError("Source redirect was rejected.")
+        if response is None:  # pragma: no cover - defensive invariant
+            raise RuntimeError("Source request did not return a response.")
         ordinary = OrdinaryHttpResponse(
             status_code=response.status_code,
             headers=_safe_headers(response.headers),
@@ -107,6 +126,32 @@ async def fetch_source_html(
             await response.aclose()
         if owns_client:
             await client.aclose()
+
+
+def _same_origin_source_redirect(source_url: str, raw_location: str | None) -> str:
+    if not raw_location or len(raw_location) > _MAX_REDIRECT_URL_LENGTH:
+        raise RuntimeError("Source redirect destination is invalid.")
+    try:
+        source = urlsplit(source_url)
+        destination_url = urljoin(source_url, raw_location.strip())
+        destination = urlsplit(destination_url)
+        source_port = source.port or 443
+        destination_port = destination.port or 443
+    except ValueError as exc:
+        raise RuntimeError("Source redirect destination is invalid.") from exc
+    if (
+        source.scheme != "https"
+        or destination.scheme != "https"
+        or not source.hostname
+        or not destination.hostname
+        or source.hostname.casefold().rstrip(".") != destination.hostname.casefold().rstrip(".")
+        or source_port != destination_port
+        or destination.username
+        or destination.password
+        or destination.fragment
+    ):
+        raise RuntimeError("Source redirect destination was rejected.")
+    return destination_url
 
 
 async def resolve_source_redirect(

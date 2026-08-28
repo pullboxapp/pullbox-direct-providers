@@ -12,7 +12,8 @@ from pullbox_provider_annas_archive.service import (
     validate_official_domain,
 )
 from pullbox_provider_contract.errors import ProtocolError
-from pullbox_provider_contract.models import SearchIntent
+from pullbox_provider_contract.models import Candidate, ParsedCandidate, SearchIntent
+from pullbox_provider_contract.source_http import BrowserChallengeRequiredError
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "annas_archive"
 MEMBER_KEY = "member-key-that-must-never-appear"
@@ -42,6 +43,46 @@ class _Source:
             "download_url": SIGNED_URL,
             "account_fast_download_info": {"downloads_left": 9},
         }
+
+
+def _libgen_candidate(
+    md5: str = "33333333333333333333333333333333",
+    *,
+    title: str = "Absolute Catwoman 001 (2026) (Digital) (Shan-Empire)",
+) -> Candidate:
+    return Candidate(
+        provider_candidate_id=f"libgen:{md5}",
+        source_reference=f"https://libgen.gl/file.php?id={md5}",
+        display_title=title,
+        raw_title=title,
+        parsed=ParsedCandidate(
+            series_title="Absolute Catwoman",
+            issue_numbers=["1"],
+            year=2026,
+            format="cbz",
+            release_group="Shan-Empire",
+        ),
+        provider_confidence=0.9,
+        content_fingerprint=f"md5:{md5}",
+        provenance={"layout": "libgen-comics-v1", "source_kind": "metadata"},
+    )
+
+
+class _CatalogFallback:
+    def __init__(
+        self,
+        candidates: list[Candidate] | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.candidates = candidates or []
+        self.error = error
+        self.calls: list[dict[str, object]] = []
+
+    async def search(self, intent: SearchIntent, **kwargs: object) -> list[Candidate]:
+        self.calls.append({"intent": intent, **kwargs})
+        if self.error is not None:
+            raise self.error
+        return self.candidates
 
 
 async def test_member_search_and_fast_resolve_use_secret_only_for_active_request() -> None:
@@ -248,6 +289,168 @@ async def test_search_uses_the_selected_official_domain_only() -> None:
     ]
 
 
+async def test_search_prefers_direct_anna_results_without_catalog_fallback() -> None:
+    fallback = _CatalogFallback([_libgen_candidate()])
+    service = AnnasArchiveProviderService(
+        page_fetcher=_Source().page,
+        catalog_fallback=fallback,
+    )
+
+    candidates = await service.search(
+        SearchIntent(
+            series_title="Example Heroes",
+            normalized_title="example heroes",
+            issue_number="7",
+            year=2026,
+        ),
+        provider_config={"domain": "https://annas-archive.gd"},
+        limit=20,
+    )
+
+    assert candidates[0].provider_candidate_id == "anna:11111111111111111111111111111111"
+    assert candidates[0].provenance == {"layout": "search-v1", "source_kind": "metadata"}
+    assert fallback.calls == []
+
+
+@pytest.mark.parametrize("direct_outcome", ["challenge", "empty"])
+async def test_search_uses_libgen_catalog_fallback_for_unavailable_or_empty_anna_search(
+    direct_outcome: str,
+) -> None:
+    async def page(_url: str, **_kwargs: object) -> str:
+        if direct_outcome == "challenge":
+            raise BrowserChallengeRequiredError
+        return '<html><form action="/search"></form></html>'
+
+    fallback = _CatalogFallback([_libgen_candidate()])
+    service = AnnasArchiveProviderService(
+        page_fetcher=page,
+        catalog_fallback=fallback,
+    )
+    intent = SearchIntent(
+        series_title="Absolute Catwoman",
+        normalized_title="absolute catwoman",
+        issue_number="1",
+        year=2026,
+    )
+
+    candidates = await service.search(
+        intent,
+        provider_config={"domain": "https://annas-archive.gd"},
+        limit=20,
+    )
+
+    assert len(fallback.calls) == 1
+    assert fallback.calls[0] == {
+        "intent": intent,
+        "provider_config": {},
+        "limit": 20,
+        "resolver_profile": None,
+    }
+    assert [candidate.provider_candidate_id for candidate in candidates] == [
+        "anna:33333333333333333333333333333333"
+    ]
+    assert candidates[0].source_reference == (
+        "https://annas-archive.gd/md5/33333333333333333333333333333333"
+    )
+    assert candidates[0].content_fingerprint is None
+    assert candidates[0].parsed.series_title == "Absolute Catwoman"
+    assert candidates[0].provenance == {
+        "layout": "libgen-catalog-fallback-v1",
+        "source_kind": "metadata",
+        "catalog_source": "libgen",
+    }
+
+
+async def test_search_prefers_canonical_catalog_candidate_before_mobile_variant() -> None:
+    fallback = _CatalogFallback(
+        [
+            _libgen_candidate(
+                "33333333333333333333333333333333",
+                title="Absolute Catwoman 001 (2026) (digital-mobile)",
+            ),
+            _libgen_candidate(
+                "44444444444444444444444444444444",
+                title="Absolute Catwoman 001 (2026) (Digital)",
+            ),
+        ]
+    )
+    service = AnnasArchiveProviderService(
+        page_fetcher=lambda *_args, **_kwargs: _empty_anna_search(),
+        catalog_fallback=fallback,
+    )
+
+    candidates = await service.search(
+        SearchIntent(
+            series_title="Absolute Catwoman",
+            normalized_title="absolute catwoman",
+            issue_number="1",
+        ),
+        provider_config={"domain": "https://annas-archive.gd"},
+        limit=20,
+    )
+
+    assert [candidate.provider_candidate_id for candidate in candidates] == [
+        "anna:44444444444444444444444444444444",
+        "anna:33333333333333333333333333333333",
+    ]
+    assert candidates[0].provider_confidence > candidates[1].provider_confidence
+
+
+async def test_search_filters_invalid_catalog_fingerprints_and_honors_limit() -> None:
+    invalid = _libgen_candidate()
+    invalid = invalid.model_copy(update={"content_fingerprint": None})
+    fallback = _CatalogFallback(
+        [
+            invalid,
+            _libgen_candidate("44444444444444444444444444444444"),
+            _libgen_candidate("55555555555555555555555555555555"),
+        ]
+    )
+    service = AnnasArchiveProviderService(
+        page_fetcher=lambda *_args, **_kwargs: _empty_anna_search(),
+        catalog_fallback=fallback,
+    )
+
+    candidates = await service.search(
+        SearchIntent(
+            series_title="Absolute Catwoman",
+            normalized_title="absolute catwoman",
+            issue_number="1",
+        ),
+        provider_config={"domain": "https://annas-archive.gd"},
+        limit=1,
+    )
+
+    assert [candidate.provider_candidate_id for candidate in candidates] == [
+        "anna:44444444444444444444444444444444"
+    ]
+
+
+async def _empty_anna_search() -> str:
+    return '<html><form action="/search"></form></html>'
+
+
+async def test_search_preserves_primary_anna_failure_when_catalog_fallback_fails() -> None:
+    async def unavailable(_url: str, **_kwargs: object) -> str:
+        raise RuntimeError("anna unavailable")
+
+    service = AnnasArchiveProviderService(
+        page_fetcher=unavailable,
+        catalog_fallback=_CatalogFallback(error=RuntimeError("catalog unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="anna unavailable"):
+        await service.search(
+            SearchIntent(
+                series_title="Absolute Catwoman",
+                normalized_title="absolute catwoman",
+                issue_number="1",
+            ),
+            provider_config={"domain": "https://annas-archive.gd"},
+            limit=20,
+        )
+
+
 async def test_collection_search_uses_meaningful_issue_title_without_ambiguous_year() -> None:
     requested: list[str] = []
 
@@ -306,6 +509,7 @@ async def test_empty_successful_fast_download_response_fails_closed() -> None:
             404,
             "candidate_not_found",
         ),
+        (404, {"error": "Record not found"}, 404, "candidate_not_found"),
         (500, {}, 503, "source_unavailable"),
         (
             200,

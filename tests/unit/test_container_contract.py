@@ -62,7 +62,7 @@ def test_conformance_runner_uses_only_the_private_provider_network() -> None:
     assert "ports" not in conformance
 
 
-def test_source_provider_images_are_independent_hardened_python_314_services() -> None:
+def test_source_provider_images_are_self_contained_hardened_python_314_services() -> None:
     for provider, (path, source_path) in SOURCE_DOCKERFILES.items():
         dockerfile = path.read_text(encoding="utf-8")
 
@@ -74,10 +74,13 @@ def test_source_provider_images_are_independent_hardened_python_314_services() -
         assert "EXPOSE 8780" in dockerfile
         assert '"--port", "8780"' in dockerfile
         assert source_path in dockerfile
-        other_source_paths = {
-            source for other, (_path, source) in SOURCE_DOCKERFILES.items() if other != provider
-        }
-        assert all(source not in dockerfile for source in other_source_paths)
+        if provider == "annas-archive":
+            assert "providers/libgen" in dockerfile
+        else:
+            other_source_paths = {
+                source for other, (_path, source) in SOURCE_DOCKERFILES.items() if other != provider
+            }
+            assert all(source not in dockerfile for source in other_source_paths)
 
 
 def test_runtime_images_install_pinned_openssl_security_update() -> None:

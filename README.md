@@ -181,6 +181,22 @@ quota, source availability, and malformed responses remain distinct failures.
 Opening search-result details must not call resolve because a fast-link request
 may consume source quota.
 
+Search attempts the selected official Anna's Archive page first. When that page
+is blocked by a browser challenge, is temporarily unavailable, or returns no
+candidates, the provider performs a bounded fallback against the LibGen comics
+catalog. Only candidates with a matching lowercase LibGen ID and MD5 content
+fingerprint are considered for Anna's Archive discovery, with canonical files
+listed before mobile derivatives. Catalog presence does not guarantee that Anna
+offers a member fast-download route, so availability is verified only when the
+user grabs the result. Catalog-derived candidates intentionally do not expose a
+cross-provider fingerprint to Pullbox: if Anna cannot resolve the record,
+Pullbox reports that failure instead of silently downloading it from LibGen.
+Resolution still uses the official member fast-download JSON API, and the member
+secret is never sent to LibGen. This fallback covers only Anna's Archive records
+sourced from LibGen and does not claim parity with Anna's Archive's complete
+catalog. The Anna's Archive image includes the catalog-discovery dependency and
+does not require a separate LibGen provider container.
+
 Successful resolves may report provider-generic remaining/limit/window quota
 telemetry. The response intentionally excludes account identity and download
 history. Pullbox stores only the latest capacity observation, applies its

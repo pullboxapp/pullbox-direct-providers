@@ -6,7 +6,7 @@ import asyncio
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 from urllib.parse import urlencode, urlsplit
 
 import httpx
@@ -22,6 +22,7 @@ from pullbox_provider_contract.models import (
 )
 from pullbox_provider_contract.search_terms import collection_title_fragment, is_collection_intent
 from pullbox_provider_contract.source_http import fetch_source_html
+from pullbox_provider_libgen.service import KNOWN_SOURCE_DOMAINS, LibGenProviderService
 
 from pullbox_provider_annas_archive.parser import parse_search_html
 
@@ -34,6 +35,7 @@ SUPPORTED_OFFICIAL_DOMAINS = (
     "annas-archive.gd",
 )
 SUPPORTED_OFFICIAL_URLS = tuple(f"https://{domain}" for domain in SUPPORTED_OFFICIAL_DOMAINS)
+CATALOG_FALLBACK_DOMAINS = KNOWN_SOURCE_DOMAINS
 DEFAULT_OFFICIAL_URL = "https://annas-archive.gd"
 _MD5 = re.compile(r"\A[a-f0-9]{32}\Z")
 _MAX_JSON_BYTES = 256 * 1024
@@ -42,6 +44,17 @@ _FAST_DOWNLOAD_DOMAIN_INDICES = (0, 2, 4, 6)
 
 PageFetcher = Callable[..., Awaitable[str]]
 FastDownloadFetcher = Callable[..., Awaitable[tuple[int, dict[str, object]]]]
+
+
+class CatalogFallback(Protocol):
+    async def search(
+        self,
+        intent: SearchIntent,
+        *,
+        provider_config: Mapping[str, object],
+        limit: int,
+        resolver_profile: ResolverProfile | None = None,
+    ) -> list[Candidate]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,9 +73,11 @@ class AnnasArchiveProviderService:
         *,
         page_fetcher: PageFetcher = fetch_source_html,
         fast_download_fetcher: FastDownloadFetcher | None = None,
+        catalog_fallback: CatalogFallback | None = None,
     ) -> None:
         self._page_fetcher = page_fetcher
         self._fast_download_fetcher = fast_download_fetcher or _fetch_fast_download
+        self._catalog_fallback = catalog_fallback or LibGenProviderService()
 
     async def search(
         self,
@@ -75,15 +90,43 @@ class AnnasArchiveProviderService:
         domain = validate_official_domain(str(provider_config.get("domain", DEFAULT_OFFICIAL_URL)))
         query = _build_query(intent)
         params = urlencode([("q", query), ("ext", "cbz"), ("ext", "cbr"), ("ext", "pdf")])
-        html = await self._page_fetcher(
-            f"{domain}/search?{params}",
-            declared_domains=((urlsplit(domain).hostname or ""),),
-            resolver_profile=resolver_profile,
+        primary_error: RuntimeError | None = None
+        try:
+            html = await self._page_fetcher(
+                f"{domain}/search?{params}",
+                declared_domains=((urlsplit(domain).hostname or ""),),
+                resolver_profile=resolver_profile,
+            )
+            candidates = parse_search_html(
+                html,
+                source_domain=urlsplit(domain).hostname or "annas-archive.gd",
+            )[:limit]
+        except asyncio.CancelledError:
+            raise
+        except RuntimeError as exc:
+            primary_error = exc
+        else:
+            if candidates:
+                return candidates
+
+        try:
+            catalog_candidates = await self._catalog_fallback.search(
+                intent,
+                provider_config={},
+                limit=limit,
+                resolver_profile=resolver_profile,
+            )
+        except asyncio.CancelledError:
+            raise
+        except (RuntimeError, ValueError):
+            if primary_error is not None:
+                raise primary_error from None
+            return []
+        return _anna_candidates_from_catalog(
+            catalog_candidates,
+            domain=domain,
+            limit=limit,
         )
-        return parse_search_html(
-            html,
-            source_domain=urlsplit(domain).hostname or "annas-archive.gd",
-        )[:limit]
 
     async def resolve(
         self,
@@ -293,6 +336,52 @@ def _build_query(intent: SearchIntent) -> str:
     return " ".join(parts)[:700]
 
 
+def _anna_candidates_from_catalog(
+    catalog_candidates: Sequence[Candidate],
+    *,
+    domain: str,
+    limit: int,
+) -> list[Candidate]:
+    candidates: list[Candidate] = []
+    seen: set[str] = set()
+    for candidate in sorted(catalog_candidates, key=_catalog_candidate_rank):
+        rank = _catalog_candidate_rank(candidate)
+        fingerprint = candidate.content_fingerprint or ""
+        md5 = fingerprint.removeprefix("md5:") if fingerprint.startswith("md5:") else ""
+        if (
+            not _MD5.fullmatch(md5)
+            or candidate.provider_candidate_id != f"libgen:{md5}"
+            or md5 in seen
+        ):
+            continue
+        seen.add(md5)
+        candidates.append(
+            candidate.model_copy(
+                update={
+                    "provider_candidate_id": f"anna:{md5}",
+                    "source_reference": f"{domain}/md5/{md5}",
+                    # Catalog presence does not prove that Anna exposes a
+                    # member fast-download route for this exact LibGen file.
+                    "content_fingerprint": None,
+                    "provider_confidence": max(candidate.provider_confidence - (0.05 * rank), 0),
+                    "provenance": {
+                        "layout": "libgen-catalog-fallback-v1",
+                        "source_kind": "metadata",
+                        "catalog_source": "libgen",
+                    },
+                }
+            )
+        )
+        if len(candidates) == limit:
+            break
+    return candidates
+
+
+def _catalog_candidate_rank(candidate: Candidate) -> int:
+    """Prefer canonical files over mobile derivatives while keeping source order."""
+    return 1 if "digital-mobile" in candidate.display_title.casefold() else 0
+
+
 def _safe_download_url(raw_url: str) -> bool:
     return _safe_download_origin(raw_url) is not None
 
@@ -367,7 +456,10 @@ def _is_quota_error(payload: Mapping[str, object]) -> bool:
 
 def _is_candidate_unavailable(payload: Mapping[str, object]) -> bool:
     error = payload.get("error")
-    return isinstance(error, str) and "invalid domain_index or path_index" in error.casefold()
+    return isinstance(error, str) and any(
+        marker in error.casefold()
+        for marker in ("invalid domain_index or path_index", "record not found")
+    )
 
 
 def _quota_status(payload: Mapping[str, object]) -> QuotaStatus | None:
