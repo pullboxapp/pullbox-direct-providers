@@ -35,6 +35,7 @@ packages = [
     "providers/synthetic/src/pullbox_provider_synthetic",
     "providers/getcomics/src/pullbox_provider_getcomics",
     "providers/annas_archive/src/pullbox_provider_annas_archive",
+    "providers/libgen/src/pullbox_provider_libgen",
 ]
 
 [tool.pytest.ini_options]
@@ -49,6 +50,7 @@ source = [
     "pullbox_provider_synthetic",
     "pullbox_provider_getcomics",
     "pullbox_provider_annas_archive",
+    "pullbox_provider_libgen",
 ]
 
 [tool.coverage.report]
@@ -74,10 +76,12 @@ packages = [
     "pullbox_provider_synthetic",
     "pullbox_provider_getcomics",
     "pullbox_provider_annas_archive",
+    "pullbox_provider_libgen",
 ]
 mypy_path = [
     "packages/provider_contract/src",
     "providers/synthetic/src",
     "providers/getcomics/src",
     "providers/annas_archive/src",
+    "providers/libgen/src",
 ]

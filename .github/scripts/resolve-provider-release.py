@@ -16,7 +16,7 @@ RELEASE_VERSION = re.compile(
     r"(?:(?:a|b|rc)(?:0|[1-9][0-9]*))?"
 )
 TAG = re.compile(
-    rf"(?P<provider>getcomics|annas-archive|synthetic)-v"
+    rf"(?P<provider>getcomics|annas-archive|libgen|synthetic)-v"
     rf"(?P<version>{RELEASE_VERSION.pattern})"
 )
 OWNER = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?")
@@ -58,6 +58,13 @@ PROVIDERS = {
         image_name="pullbox-provider-annas-archive",
         title="Pullbox Anna's Archive Direct Download Provider",
         description="Optional Anna's Archive discovery provider for Pullbox direct downloads",
+    ),
+    "libgen": ProviderDefinition(
+        dockerfile="docker/Dockerfile.libgen",
+        version_file="providers/libgen/pyproject.toml",
+        image_name="pullbox-provider-libgen",
+        title="Pullbox Library Genesis Direct Download Provider",
+        description="Optional LibGen discovery provider for Pullbox direct downloads",
     ),
     "synthetic": ProviderDefinition(
         dockerfile="docker/Dockerfile.synthetic",

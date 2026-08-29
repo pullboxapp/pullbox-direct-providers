@@ -27,3 +27,12 @@ def test_explicit_issue_before_release_group_keeps_issue_coverage() -> None:
 
     assert evidence.series_title == "War Wolf"
     assert evidence.issue_numbers == ("2",)
+
+
+def test_unprefixed_issue_before_release_labels_keeps_issue_coverage() -> None:
+    evidence = parse_comic_title("Absolute Batman 022 (2026) (Digital) (Shan-Empire).cbz")
+
+    assert evidence.series_title == "Absolute Batman"
+    assert evidence.issue_numbers == ("22",)
+    assert evidence.year == 2026
+    assert evidence.format == "cbz"

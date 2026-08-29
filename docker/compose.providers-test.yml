@@ -4,7 +4,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.getcomics
       args:
-        PYTHON_BASE: public.ecr.aws/docker/library/python:3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6
+        PYTHON_BASE: public.ecr.aws/docker/library/python:3.14-slim@sha256:83ff1d245a3d57d04152252d3ef9cb361494d0b3395abd65a5ebe91c401c8e83
     environment:
       PULLBOX_PROVIDER_TOKEN: ${PULLBOX_PROVIDER_TOKEN:-test-provider-token-with-sufficient-entropy}
     read_only: true
@@ -23,7 +23,26 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.annas-archive
       args:
-        PYTHON_BASE: public.ecr.aws/docker/library/python:3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6
+        PYTHON_BASE: public.ecr.aws/docker/library/python:3.14-slim@sha256:83ff1d245a3d57d04152252d3ef9cb361494d0b3395abd65a5ebe91c401c8e83
+    environment:
+      PULLBOX_PROVIDER_TOKEN: ${PULLBOX_PROVIDER_TOKEN:-test-provider-token-with-sufficient-entropy}
+    read_only: true
+    user: "65532:65532"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    networks:
+      - provider-test
+
+  libgen:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.libgen
+      args:
+        PYTHON_BASE: public.ecr.aws/docker/library/python:3.14-slim@sha256:83ff1d245a3d57d04152252d3ef9cb361494d0b3395abd65a5ebe91c401c8e83
     environment:
       PULLBOX_PROVIDER_TOKEN: ${PULLBOX_PROVIDER_TOKEN:-test-provider-token-with-sufficient-entropy}
     read_only: true
@@ -42,16 +61,19 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.provider-smoke
       args:
-        PYTHON_BASE: public.ecr.aws/docker/library/python:3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6
+        PYTHON_BASE: public.ecr.aws/docker/library/python:3.14-slim@sha256:83ff1d245a3d57d04152252d3ef9cb361494d0b3395abd65a5ebe91c401c8e83
     depends_on:
       getcomics:
         condition: service_healthy
       annas-archive:
         condition: service_healthy
+      libgen:
+        condition: service_healthy
     environment:
       PULLBOX_PROVIDER_TOKEN: ${PULLBOX_PROVIDER_TOKEN:-test-provider-token-with-sufficient-entropy}
       GETCOMICS_URL: http://getcomics:8780
       ANNAS_ARCHIVE_URL: http://annas-archive:8780
+      LIBGEN_URL: http://libgen:8780
     read_only: true
     user: "65532:65532"
     cap_drop:

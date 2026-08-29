@@ -8,7 +8,7 @@ import json
 import re
 from pathlib import Path
 
-PROVIDERS = {"getcomics", "annas-archive", "synthetic"}
+PROVIDERS = {"getcomics", "annas-archive", "libgen", "synthetic"}
 STABLE_VERSION = r"(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)\.(?P<patch>0|[1-9][0-9]*)"
 
 

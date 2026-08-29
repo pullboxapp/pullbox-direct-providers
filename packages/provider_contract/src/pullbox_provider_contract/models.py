@@ -152,6 +152,11 @@ class Candidate(ContractModel):
     raw_title: str = Field(min_length=1, max_length=2000)
     parsed: ParsedCandidate
     provider_confidence: float = Field(ge=0, le=1)
+    content_fingerprint: str | None = Field(
+        default=None,
+        pattern=r"^md5:[0-9a-f]{32}$",
+        repr=False,
+    )
     provenance: dict[str, DiagnosticScalar] = Field(default_factory=dict)
     can_resolve: bool = True
     expires_at: datetime | None = None

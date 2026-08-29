@@ -4,12 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pullbox-provider-annas-archive"
-version = "1.0.1"
+version = "1.0.2"
 description = "Optional Anna's Archive discovery provider for Pullbox"
 requires-python = ">=3.12"
 license = "GPL-3.0-or-later"
 dependencies = [
     "pullbox-direct-provider-contract==1.0.0",
+    "pullbox-provider-libgen==1.0.0",
     "uvicorn>=0.34,<1",
 ]
 

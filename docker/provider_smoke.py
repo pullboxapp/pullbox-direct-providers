@@ -1,4 +1,4 @@
-"""Private-network startup smoke for the two official source images."""
+"""Private-network startup smoke for source-provider images."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ def _get(base_url: str, path: str, token: str) -> dict[str, object]:
     parsed = urlsplit(base_url)
     if (
         parsed.scheme != "http"
-        or parsed.hostname not in {"getcomics", "annas-archive"}
+        or parsed.hostname not in {"getcomics", "annas-archive", "libgen"}
         or parsed.port != 8780
         or parsed.path
     ):
@@ -40,6 +40,7 @@ def main() -> None:
     expected = {
         os.environ["GETCOMICS_URL"]: "pullbox.getcomics",
         os.environ["ANNAS_ARCHIVE_URL"]: "pullbox.annas_archive",
+        os.environ["LIBGEN_URL"]: "pullbox.libgen",
     }
     for base_url, provider_id in expected.items():
         manifest = _get(base_url, "/v1/manifest", token)

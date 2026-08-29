@@ -1,5 +1,12 @@
-ARG PYTHON_BASE=python:3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6
-FROM ${PYTHON_BASE}
+ARG PYTHON_BASE=python:3.14-slim@sha256:83ff1d245a3d57d04152252d3ef9cb361494d0b3395abd65a5ebe91c401c8e83
+FROM ${PYTHON_BASE} AS runtime
+
+RUN apt-get update && \
+    apt-get install --yes --no-install-recommends \
+        libssl3t64=3.5.7-1~deb13u2 \
+        openssl=3.5.7-1~deb13u2 \
+        openssl-provider-legacy=3.5.7-1~deb13u2 && \
+    rm -rf /var/lib/apt/lists/*
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1

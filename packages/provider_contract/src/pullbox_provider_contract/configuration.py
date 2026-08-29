@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 type ConfigurationValue = str | int | float | bool | None
 
@@ -32,9 +34,18 @@ _FIELD_KEYS = {
     "maxLength",
     "x-pullbox-secret",
     "x-pullbox-placeholder",
+    "x-pullbox-suggestions",
+    "x-pullbox-source-origin",
 }
 _FIELD_TYPES = frozenset({"string", "boolean", "integer", "number"})
 _FIELD_FORMATS = frozenset({"uri"})
+_SPECIAL_USE_SOURCE_SUFFIXES = (
+    "localhost",
+    "local",
+    "onion",
+    "internal",
+    "home.arpa",
+)
 
 
 class ConfigurationSchemaError(ValueError):
@@ -59,6 +70,8 @@ class ConfigurationField:
     min_length: int | None
     max_length: int | None
     placeholder: str | None
+    suggestions: tuple[str, ...]
+    source_origin: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,11 +127,31 @@ def _validate_field(name: str, raw: object, required: bool) -> ConfigurationFiel
         raise ConfigurationSchemaError(f"Configuration field {name} has an unsupported format.")
 
     choices = _choices(field.get("enum"), value_type, name)
+    suggestions = _suggestions(
+        field.get("x-pullbox-suggestions"),
+        value_type=value_type,
+        input_format=input_format,
+        secret=secret,
+        name=name,
+    )
+    source_origin = field.get("x-pullbox-source-origin", False)
+    if not isinstance(source_origin, bool):
+        raise ConfigurationSchemaError(
+            f"Configuration field {name} has an invalid source-origin marker."
+        )
+    if source_origin and (value_type != "string" or input_format != "uri" or secret):
+        raise ConfigurationSchemaError(
+            f"Configuration field {name} has an invalid source-origin control."
+        )
     default = field.get("default")
     if "default" in field:
         _validate_typed_value(default, value_type, name)
         if choices and default not in choices:
             raise ConfigurationSchemaError(f"Configuration field {name} has an invalid default.")
+        if (source_origin or suggestions) and (
+            not isinstance(default, str) or not _is_safe_https_origin(default)
+        ):
+            raise ConfigurationSchemaError(f"Configuration field {name} has an unsafe URI default.")
 
     minimum = _optional_number(field.get("minimum"), f"{name} minimum")
     maximum = _optional_number(field.get("maximum"), f"{name} maximum")
@@ -155,13 +188,19 @@ def _validate_field(name: str, raw: object, required: bool) -> ConfigurationFiel
         min_length=min_length,
         max_length=max_length,
         placeholder=_optional_text(field.get("x-pullbox-placeholder"), f"{name} placeholder"),
+        suggestions=suggestions,
+        source_origin=source_origin,
     )
 
 
 def _required_names(raw: object, properties: Mapping[object, object]) -> set[str]:
     if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
         raise ConfigurationSchemaError("Configuration schema required must be a string list.")
+    if len(raw) > _MAX_FIELDS:
+        raise ConfigurationSchemaError("Configuration schema exceeds the required field limit.")
     required = set(raw)
+    if len(required) != len(raw):
+        raise ConfigurationSchemaError("Configuration schema has duplicate required fields.")
     if not required.issubset(properties):
         raise ConfigurationSchemaError("Configuration schema requires an unknown field.")
     return required
@@ -172,9 +211,98 @@ def _choices(raw: object, value_type: str, name: str) -> tuple[ConfigurationValu
         return ()
     if not isinstance(raw, list) or not raw or len(raw) > 100:
         raise ConfigurationSchemaError(f"Configuration field {name} has invalid choices.")
+    choices: list[ConfigurationValue] = []
     for value in raw:
         _validate_typed_value(value, value_type, name)
-    return tuple(raw)
+        if value in choices:
+            raise ConfigurationSchemaError(f"Configuration field {name} has duplicate choices.")
+        choices.append(value)
+    return tuple(choices)
+
+
+def _suggestions(
+    raw: object,
+    *,
+    value_type: object,
+    input_format: object,
+    secret: bool,
+    name: str,
+) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    if value_type != "string" or input_format != "uri" or secret:
+        raise ConfigurationSchemaError(f"Configuration field {name} has invalid URI suggestions.")
+    if not isinstance(raw, list) or not raw or len(raw) > 20:
+        raise ConfigurationSchemaError(f"Configuration field {name} has invalid URI suggestions.")
+    suggestions: list[str] = []
+    for value in raw:
+        if not isinstance(value, str) or not _is_safe_https_origin(value):
+            raise ConfigurationSchemaError(
+                f"Configuration field {name} has invalid URI suggestions."
+            )
+        if value in suggestions:
+            raise ConfigurationSchemaError(
+                f"Configuration field {name} has duplicate URI suggestions."
+            )
+        suggestions.append(value)
+    return tuple(suggestions)
+
+
+def _is_safe_https_origin(raw: str) -> bool:
+    if not raw or len(raw) > _MAX_TEXT_LENGTH:
+        return False
+    try:
+        parsed = urlsplit(raw)
+        port = parsed.port
+    except ValueError:
+        return False
+    hostname = parsed.hostname
+    if hostname is None:
+        return False
+    normalized_hostname = hostname.casefold().rstrip(".")
+    if not _is_public_source_hostname_syntax(normalized_hostname):
+        return False
+
+    return bool(
+        parsed.scheme == "https"
+        and parsed.username is None
+        and parsed.password is None
+        and port in {None, 443}
+        and parsed.path in {"", "/"}
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
+def _is_public_source_hostname_syntax(hostname: str) -> bool:
+    if any(
+        hostname == suffix or hostname.endswith(f".{suffix}")
+        for suffix in _SPECIAL_USE_SOURCE_SUFFIXES
+    ):
+        return False
+    try:
+        ipaddress.ip_address(hostname)
+    except ValueError:
+        pass
+    else:
+        return False
+    return not _looks_like_legacy_ipv4_literal(hostname)
+
+
+def _looks_like_legacy_ipv4_literal(hostname: str) -> bool:
+    labels = hostname.split(".")
+    if not 1 <= len(labels) <= 4:
+        return False
+    for label in labels:
+        if not label:
+            return False
+        if label.startswith("0x"):
+            digits = label[2:]
+            if not digits or any(character not in "0123456789abcdef" for character in digits):
+                return False
+        elif not label.isascii() or not label.isdigit():
+            return False
+    return True
 
 
 def _validate_typed_value(value: object, value_type: str, name: str) -> None:

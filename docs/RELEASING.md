@@ -1,10 +1,10 @@
 # Provider Image Release Process
 
-The GetComics, Anna's Archive, and synthetic providers share one production
-pipeline but retain independent version histories. A provider release publishes
-one image to GHCR and Docker Hub, proves that both registries expose the same
-multi-architecture digest, signs both copies, and then creates one GitHub
-Release.
+The GetComics, Anna's Archive, LibGen, and synthetic providers share one
+production pipeline but retain independent version histories. A provider
+release publishes one image to GHCR and Docker Hub, proves that both registries
+expose the same multi-architecture digest, signs both copies, and then creates
+one GitHub Release.
 
 ## Required Repository Configuration
 
@@ -27,15 +27,17 @@ The protected tag ruleset must cover:
 
 - `getcomics-v*`
 - `annas-archive-v*`
+- `libgen-v*`
 - `synthetic-v*`
 
-Pre-create the public `pullbox-provider-getcomics` and
-`pullbox-provider-annas-archive` Docker Hub repositories with their expected
-descriptions and overviews. Configure numbered stable and canonical Python
-prerelease versions plus `sha-*` tags as immutable while allowing `latest`,
-internal `candidate-*`, and manual `edge` rehearsal tags to advance. Docker Hub
-Scout coverage is optional; the blocking release security gate is the reviewed
-Grype scan that runs before runnable tags are created.
+Pre-create the public `pullbox-provider-getcomics`,
+`pullbox-provider-annas-archive`, and `pullbox-provider-libgen` Docker Hub
+repositories with their expected descriptions and overviews. Configure
+numbered stable and canonical Python prerelease versions plus `sha-*` tags as
+immutable while allowing `latest`, internal `candidate-*`, and manual `edge`
+rehearsal tags to advance. Docker Hub Scout coverage is optional; the blocking
+release security gate is the reviewed Grype scan that runs before runnable tags
+are created.
 
 ## Release Preparation
 
@@ -48,8 +50,9 @@ Grype scan that runs before runnable tags are created.
    silently increment a release version.
 5. Set the selected provider package version to the exact release version:
    `providers/getcomics/pyproject.toml` for GetComics,
-   `providers/annas_archive/pyproject.toml` for Anna's Archive, or the root
-   `pyproject.toml` for the synthetic conformance image.
+   `providers/annas_archive/pyproject.toml` for Anna's Archive,
+   `providers/libgen/pyproject.toml` for LibGen, or the root `pyproject.toml`
+   for the synthetic conformance image.
 6. Confirm the release commit is the intended `main` commit and the worktree is
    clean. The workflow independently rejects any release tag whose commit is
    not already merged into `main`.
@@ -59,6 +62,7 @@ Stable provider tags use strict semantic versions:
 ```text
 getcomics-v1.0.0
 annas-archive-v1.0.0
+libgen-v1.0.0
 synthetic-v1.0.0
 ```
 
@@ -80,9 +84,9 @@ git tag -s getcomics-v1.0.0 -m "GetComics provider v1.0.0"
 git push origin getcomics-v1.0.0
 ```
 
-Repeat with the Anna's Archive prefix when releasing that provider. Releasing
-both providers at the same version still uses two tags and two independent
-workflow runs.
+Repeat with the Anna's Archive or LibGen prefix when releasing those providers.
+Releasing multiple providers at the same version still uses separate tags and
+independent workflow runs.
 
 The `Provider Image Release` workflow then:
 

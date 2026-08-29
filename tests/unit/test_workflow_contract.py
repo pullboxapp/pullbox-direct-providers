@@ -128,7 +128,7 @@ def test_container_security_builds_tests_and_scans_every_runtime_image() -> None
     workflow = _load_yaml(CONTAINER_WORKFLOW)
     jobs = workflow["jobs"]
     text = CONTAINER_WORKFLOW.read_text(encoding="utf-8")
-    expected_providers = {"synthetic", "getcomics", "annas-archive"}
+    expected_providers = {"synthetic", "getcomics", "annas-archive", "libgen"}
 
     assert {"runtime-smoke", "image-scan", "multiarch-build", "required"} <= set(jobs)
     assert jobs["required"]["name"] == "Container Security Required"
@@ -177,11 +177,13 @@ def test_provider_release_is_tag_or_manual_only() -> None:
     assert triggers["push"]["tags"] == [
         "getcomics-v*",
         "annas-archive-v*",
+        "libgen-v*",
         "synthetic-v*",
     ]
     assert set(triggers["workflow_dispatch"]["inputs"]["provider"]["options"]) == {
         "getcomics",
         "annas-archive",
+        "libgen",
         "synthetic",
     }
     assert "tag_override" not in triggers["workflow_dispatch"]["inputs"]
@@ -207,7 +209,7 @@ def test_provider_release_maps_each_provider_to_both_registries() -> None:
     text = PROVIDER_RELEASE_WORKFLOW.read_text(encoding="utf-8")
     resolver_text = RELEASE_RESOLVER.read_text(encoding="utf-8")
 
-    for provider in ("getcomics", "annas-archive", "synthetic"):
+    for provider in ("getcomics", "annas-archive", "libgen", "synthetic"):
         assert f'dockerfile="docker/Dockerfile.{provider}"' in resolver_text
         assert f'image_name="pullbox-provider-{provider}"' in resolver_text
 
@@ -314,6 +316,7 @@ def test_github_release_requires_a_successful_tagged_provider_release() -> None:
     assert "repos/${GITHUB_REPOSITORY}/dispatches" in text
     assert "select-latest-provider-release.py" not in text
     assert "Promote highest stable release to latest" not in text
+    assert 'libgen) RELEASE_NAME="Library Genesis Provider"' in text
 
 
 def test_latest_reconciliation_is_serialized_and_idempotent_per_provider() -> None:
@@ -326,6 +329,7 @@ def test_latest_reconciliation_is_serialized_and_idempotent_per_provider() -> No
     assert set(triggers["workflow_dispatch"]["inputs"]["provider"]["options"]) == {
         "getcomics",
         "annas-archive",
+        "libgen",
         "synthetic",
     }
     assert workflow["concurrency"]["group"] == (

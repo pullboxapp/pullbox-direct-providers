@@ -93,6 +93,121 @@ async def test_recognized_challenge_uses_configured_resolver_once() -> None:
     assert calls == 1
 
 
+async def test_same_origin_redirect_reaches_challenge_with_cookie_and_final_url() -> None:
+    requests: list[httpx.Request] = []
+    resolver_source_url: str | None = None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(
+                302,
+                headers={
+                    "location": "/search?q=test&check=1",
+                    "set-cookie": "__ddg=fixture; Path=/; Secure",
+                },
+                request=request,
+            )
+        assert request.headers.get("cookie") == "__ddg=fixture"
+        return httpx.Response(
+            403,
+            text="<html>DDoS-Guard is checking your browser</html>",
+            headers={"server": "ddos-guard"},
+            request=request,
+        )
+
+    async def browser_resolver(
+        *_args: object,
+        source_url: str,
+        **_kwargs: object,
+    ) -> ProviderResolverOutcome:
+        nonlocal resolver_source_url
+        resolver_source_url = source_url
+        return ProviderResolverOutcome(
+            challenge=BrowserChallengeKind.DDOS_GUARD,
+            solution=ProviderResolverSolution(
+                final_url=source_url,
+                status_code=200,
+                html="<html>resolved after redirect</html>",
+                cookies=(),
+            ),
+        )
+
+    profile = ResolverProfile(
+        endpoint="http://resolver:8191",
+        timeout_seconds=20,
+        max_concurrency=1,
+        declared_domains=["source.example"],
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        html = await fetch_source_html(
+            "https://source.example/search?q=test",
+            declared_domains=("source.example",),
+            http_client=client,
+            resolver_profile=profile,
+            target_resolver=_public_resolver,
+            browser_resolver=browser_resolver,
+        )
+
+    assert html == "<html>resolved after redirect</html>"
+    assert [str(request.url) for request in requests] == [
+        "https://source.example/search?q=test",
+        "https://source.example/search?q=test&check=1",
+    ]
+    assert resolver_source_url == "https://source.example/search?q=test&check=1"
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        "https://other.example/search?q=test&check=1",
+        "http://source.example/search?q=test&check=1",
+        "https://user:secret@source.example/search?q=test&check=1",
+        "https://source.example:444/search?q=test&check=1",
+    ],
+)
+async def test_source_html_rejects_unsafe_redirect_target(location: str) -> None:
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            302,
+            headers={"location": location},
+            request=request,
+        )
+    )
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(RuntimeError, match="redirect"):
+            await fetch_source_html(
+                "https://source.example/search?q=test",
+                declared_domains=("source.example",),
+                http_client=client,
+                target_resolver=_public_resolver,
+            )
+
+
+async def test_source_html_rejects_a_second_redirect() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            302,
+            headers={"location": f"/search?q=test&check={calls}"},
+            request=request,
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(RuntimeError, match="redirect"):
+            await fetch_source_html(
+                "https://source.example/search?q=test",
+                declared_domains=("source.example",),
+                http_client=client,
+                target_resolver=_public_resolver,
+            )
+
+    assert calls == 2
+
+
 async def test_challenge_without_profile_and_unsafe_redirect_fail_closed() -> None:
     challenge = httpx.MockTransport(
         lambda request: httpx.Response(
