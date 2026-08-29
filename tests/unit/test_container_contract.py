@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
 import yaml
@@ -17,11 +18,22 @@ SOURCE_DOCKERFILES = {
 }
 SOURCE_COMPOSE_FILE = ROOT / "docker" / "compose.providers-test.yml"
 SOURCE_SMOKE_SCRIPT = ROOT / "docker" / "provider_smoke.py"
+ANNAS_PROJECT = ROOT / "providers" / "annas_archive" / "pyproject.toml"
+LIBGEN_PROJECT = ROOT / "providers" / "libgen" / "pyproject.toml"
 ALL_RUNTIME_DOCKERFILES = {
     DOCKERFILE,
     ROOT / "docker" / "Dockerfile.provider-smoke",
     *(path for path, _source_path in SOURCE_DOCKERFILES.values()),
 }
+
+
+def test_annas_archive_pins_the_bundled_libgen_version() -> None:
+    with ANNAS_PROJECT.open("rb") as project_file:
+        annas_project = tomllib.load(project_file)
+    with LIBGEN_PROJECT.open("rb") as project_file:
+        libgen_version = tomllib.load(project_file)["project"]["version"]
+
+    assert f"pullbox-provider-libgen=={libgen_version}" in annas_project["project"]["dependencies"]
 
 
 def test_runtime_uses_pinned_python_314_and_non_root_identity() -> None:

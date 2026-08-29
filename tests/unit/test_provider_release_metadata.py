@@ -47,12 +47,12 @@ def test_tag_release_maps_getcomics_to_both_registry_names() -> None:
 def test_tag_release_maps_annas_archive_to_both_registry_names() -> None:
     release = _load_module().resolve_release(
         repository_owner="pullboxapp",
-        tag="annas-archive-v1.0.1",
+        tag="annas-archive-v1.0.2",
     )
 
     assert release.provider == "annas-archive"
-    assert release.version == "1.0.1"
-    assert release.release_tag == "annas-archive-v1.0.1"
+    assert release.version == "1.0.2"
+    assert release.release_tag == "annas-archive-v1.0.2"
     assert release.is_release is True
     assert release.is_prerelease is False
     assert release.dockerfile == "docker/Dockerfile.annas-archive"
@@ -63,12 +63,12 @@ def test_tag_release_maps_annas_archive_to_both_registry_names() -> None:
 def test_tag_release_maps_libgen_to_both_registry_names() -> None:
     release = _load_module().resolve_release(
         repository_owner="pullboxapp",
-        tag="libgen-v0.1.0",
+        tag="libgen-v1.0.0",
     )
 
     assert release.provider == "libgen"
-    assert release.version == "0.1.0"
-    assert release.release_tag == "libgen-v0.1.0"
+    assert release.version == "1.0.0"
+    assert release.release_tag == "libgen-v1.0.0"
     assert release.is_release is True
     assert release.is_prerelease is False
     assert release.dockerfile == "docker/Dockerfile.libgen"
