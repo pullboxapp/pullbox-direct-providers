@@ -196,7 +196,11 @@ def _validate_field(name: str, raw: object, required: bool) -> ConfigurationFiel
 def _required_names(raw: object, properties: Mapping[object, object]) -> set[str]:
     if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
         raise ConfigurationSchemaError("Configuration schema required must be a string list.")
+    if len(raw) > _MAX_FIELDS:
+        raise ConfigurationSchemaError("Configuration schema exceeds the required field limit.")
     required = set(raw)
+    if len(required) != len(raw):
+        raise ConfigurationSchemaError("Configuration schema has duplicate required fields.")
     if not required.issubset(properties):
         raise ConfigurationSchemaError("Configuration schema requires an unknown field.")
     return required
@@ -207,9 +211,13 @@ def _choices(raw: object, value_type: str, name: str) -> tuple[ConfigurationValu
         return ()
     if not isinstance(raw, list) or not raw or len(raw) > 100:
         raise ConfigurationSchemaError(f"Configuration field {name} has invalid choices.")
+    choices: list[ConfigurationValue] = []
     for value in raw:
         _validate_typed_value(value, value_type, name)
-    return tuple(raw)
+        if value in choices:
+            raise ConfigurationSchemaError(f"Configuration field {name} has duplicate choices.")
+        choices.append(value)
+    return tuple(choices)
 
 
 def _suggestions(

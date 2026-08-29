@@ -288,6 +288,47 @@ def test_configuration_schema_rejects_more_than_fifty_controls() -> None:
         validate_configuration_schema(schema)
 
 
+def test_configuration_schema_rejects_duplicate_required_names() -> None:
+    schema = {
+        "type": "object",
+        "properties": {"language": {"type": "string"}},
+        "required": ["language", "language"],
+        "additionalProperties": False,
+    }
+
+    with pytest.raises(ConfigurationSchemaError, match="duplicate required fields"):
+        validate_configuration_schema(schema)
+
+
+def test_configuration_schema_rejects_more_than_fifty_required_names() -> None:
+    properties = {f"field_{index}": {"type": "string"} for index in range(50)}
+    schema = {
+        "type": "object",
+        "properties": properties,
+        "required": [*properties, "field_0"],
+        "additionalProperties": False,
+    }
+
+    with pytest.raises(ConfigurationSchemaError, match="required field limit"):
+        validate_configuration_schema(schema)
+
+
+def test_configuration_schema_rejects_duplicate_choices() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "language": {
+                "type": "string",
+                "enum": ["en", "en"],
+            }
+        },
+        "additionalProperties": False,
+    }
+
+    with pytest.raises(ConfigurationSchemaError, match="duplicate choices"):
+        validate_configuration_schema(schema)
+
+
 @pytest.mark.parametrize(
     "field",
     [
