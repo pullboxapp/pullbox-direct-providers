@@ -30,6 +30,7 @@ from pullbox_provider_contract.resolver import ProviderResolverError
 from pullbox_provider_contract.source_http import BrowserChallengeRequiredError
 
 from pullbox_provider_annas_archive.service import (
+    CATALOG_FALLBACK_DOMAINS,
     DEFAULT_OFFICIAL_URL,
     SUPPORTED_OFFICIAL_DOMAINS,
     SUPPORTED_OFFICIAL_URLS,
@@ -76,7 +77,7 @@ def create_app(
             homepage_url="https://github.com/pullboxapp/pullbox-direct-providers",
             documentation_url="https://github.com/pullboxapp/pullbox-direct-providers",
             support_url="https://github.com/pullboxapp/pullbox-direct-providers/issues",
-            source_domains=list(SUPPORTED_OFFICIAL_DOMAINS),
+            source_domains=[*SUPPORTED_OFFICIAL_DOMAINS, *CATALOG_FALLBACK_DOMAINS],
             artifact_host_patterns=["generic_https"],
             capabilities=ProviderCapabilities(
                 search=True,

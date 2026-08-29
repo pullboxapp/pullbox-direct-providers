@@ -17,9 +17,11 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
 WORKDIR /build
 
 COPY packages/provider_contract packages/provider_contract
+COPY providers/libgen providers/libgen
 COPY providers/annas_archive providers/annas_archive
 
 RUN python -m pip wheel --wheel-dir /wheels ./packages/provider_contract && \
+    python -m pip wheel --find-links /wheels --wheel-dir /wheels ./providers/libgen && \
     python -m pip wheel --find-links /wheels --wheel-dir /wheels ./providers/annas_archive
 
 FROM security-patched AS runtime

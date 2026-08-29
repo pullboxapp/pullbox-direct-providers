@@ -106,6 +106,11 @@ async def test_anna_manifest_marks_member_key_secret_and_official_urls_editable(
         "annas-archive.gl",
         "annas-archive.pk",
         "annas-archive.gd",
+        "libgen.gl",
+        "libgen.li",
+        "libgen.vg",
+        "libgen.la",
+        "libgen.bz",
     ]
     assert payload["artifact_host_patterns"] == ["generic_https"]
     schema = payload["configuration_schema"]

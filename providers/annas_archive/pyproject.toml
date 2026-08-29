@@ -10,6 +10,7 @@ requires-python = ">=3.12"
 license = "GPL-3.0-or-later"
 dependencies = [
     "pullbox-direct-provider-contract==1.0.0",
+    "pullbox-provider-libgen==0.1.0",
     "uvicorn>=0.34,<1",
 ]
 
