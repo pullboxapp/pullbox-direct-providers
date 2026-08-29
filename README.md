@@ -7,8 +7,8 @@ Optional, separately deployed direct-download discovery providers for
 
 This repository provides the version-one Pullbox direct-download protocol,
 Python DTO package, compatibility policy, conformance runner, synthetic
-reference provider, the official GetComics and Anna's Archive providers, and a
-release-gated LibGen community provider. Published production images are
+reference provider, the official GetComics and Anna's Archive providers, and the
+LibGen community provider. Published production images are
 independently versioned, multi-architecture, scanned, signed, and available
 from GHCR and Docker Hub.
 
@@ -18,8 +18,7 @@ from GHCR and Docker Hub.
 - Anna's Archive: metadata discovery with opt-in member fast-download
   resolution; a member secret is required only by the resolve operation.
 - LibGen: bounded HTML discovery, keyed metadata enrichment, and same-source
-  generic HTTPS resolution with an editable validated source origin. Its image
-  remains independently gated until the LibGen release decision is approved.
+  generic HTTPS resolution with an editable validated source origin.
 
 Each provider will run as an independent, stateless OCI service and implement a
 versioned, language-neutral Pullbox provider contract.
@@ -248,10 +247,8 @@ either registry; both names resolve to the same signed digest.
 | Provider | GHCR | Docker Hub |
 | --- | --- | --- |
 | GetComics | `ghcr.io/pullboxapp/pullbox-provider-getcomics:1.0.2` | `docker.io/pullbox/pullbox-provider-getcomics:1.0.2` |
-| Anna's Archive | `ghcr.io/pullboxapp/pullbox-provider-annas-archive:1.0.1` | `docker.io/pullbox/pullbox-provider-annas-archive:1.0.1` |
-
-LibGen image publication is intentionally omitted from this table until its
-independent release gate is approved and a numbered provider release exists.
+| Anna's Archive | `ghcr.io/pullboxapp/pullbox-provider-annas-archive:1.0.2` | `docker.io/pullbox/pullbox-provider-annas-archive:1.0.2` |
+| LibGen | `ghcr.io/pullboxapp/pullbox-provider-libgen:1.0.0` | `docker.io/pullbox/pullbox-provider-libgen:1.0.0` |
 
 Pin a numbered version or the immutable digest in production. `latest` tracks
 only the newest stable provider release; prerelease and manual `edge` builds do
