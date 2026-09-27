@@ -19,12 +19,15 @@ class _HealthSession:
         slow_fetch: bool = False,
         slow_close: bool = False,
         close_release: asyncio.Event | None = None,
+        suppress_close_cancellation: bool = False,
     ) -> None:
         self.slow_fetch = slow_fetch
         self.slow_close = slow_close
         self.close_release = close_release
+        self.suppress_close_cancellation = suppress_close_cancellation
         self.started = asyncio.Event()
         self.close_started = asyncio.Event()
+        self.closed_event = asyncio.Event()
         self.fetch_count = 0
         self.fetch_cancelled = False
         self.close_called = False
@@ -53,6 +56,12 @@ class _HealthSession:
                 await asyncio.Event().wait()
             except asyncio.CancelledError:
                 self.close_cancelled = True
+                if self.suppress_close_cancellation:
+                    assert self.close_release is not None
+                    await self.close_release.wait()
+                    self.closed = True
+                    self.closed_event.set()
+                    return
                 raise
         if self.close_release is not None:
             try:
@@ -61,6 +70,7 @@ class _HealthSession:
                 self.close_cancelled = True
                 raise
         self.closed = True
+        self.closed_event.set()
 
 
 @pytest.fixture
@@ -110,6 +120,73 @@ async def test_source_health_bounds_session_cleanup(short_health_budget: None) -
 
     assert set(health.values()) == {ProviderStatus.UNAVAILABLE}
     assert all(session.close_called and session.close_cancelled for session in sessions.values())
+
+
+async def test_source_health_does_not_wait_for_cleanup_that_suppresses_cancellation(
+    short_health_budget: None,
+) -> None:
+    close_release = asyncio.Event()
+    sessions = {
+        origin: _HealthSession(
+            slow_close=True,
+            close_release=close_release,
+            suppress_close_cancellation=True,
+        )
+        for origin in KNOWN_SOURCE_URLS
+    }
+    task = asyncio.create_task(_service(sessions).source_health())
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*(session.close_started.wait() for session in sessions.values())),
+            timeout=1,
+        )
+        await asyncio.sleep(0.15)
+        assert task.done(), "Source health waited indefinitely for cancellation-resistant cleanup"
+    finally:
+        close_release.set()
+        await asyncio.wait_for(task, timeout=1)
+        await asyncio.wait_for(
+            asyncio.gather(*(session.closed_event.wait() for session in sessions.values())),
+            timeout=1,
+        )
+
+    assert all(session.close_cancelled and session.closed for session in sessions.values())
+
+
+async def test_source_health_retains_detached_cleanup_until_completion(
+    short_health_budget: None,
+) -> None:
+    close_release = asyncio.Event()
+    sessions = {
+        origin: _HealthSession(
+            slow_close=True,
+            close_release=close_release,
+            suppress_close_cancellation=True,
+        )
+        for origin in KNOWN_SOURCE_URLS
+    }
+    task = asyncio.create_task(_service(sessions).source_health())
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*(session.close_started.wait() for session in sessions.values())),
+            timeout=1,
+        )
+        await asyncio.sleep(0.15)
+        assert task.done(), "Source health waited indefinitely for detached cleanup"
+        assert len(service_module._DETACHED_HEALTH_CLOSE_TASKS) == len(sessions)
+        assert all(
+            not close_task.done() for close_task in service_module._DETACHED_HEALTH_CLOSE_TASKS
+        )
+    finally:
+        close_release.set()
+        await asyncio.wait_for(task, timeout=1)
+        await asyncio.wait_for(
+            asyncio.gather(*(session.closed_event.wait() for session in sessions.values())),
+            timeout=1,
+        )
+
+    await asyncio.sleep(0)
+    assert not service_module._DETACHED_HEALTH_CLOSE_TASKS
 
 
 async def test_cancelling_health_cleans_up_all_probes(short_health_budget: None) -> None:
