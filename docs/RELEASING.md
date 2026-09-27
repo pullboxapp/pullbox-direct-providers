@@ -93,7 +93,8 @@ The `Provider Image Release` workflow then:
 1. Validates the tag and maps it to an allowlisted Dockerfile and image names.
 2. Builds Linux AMD64 and ARM64 images and pushes untagged platform blobs by
    immutable digest to GHCR and Docker Hub.
-3. Scans the exact AMD64 candidate against the reviewed Grype baseline.
+3. Scans the exact AMD64 and ARM64 candidates against the reviewed Grype baseline;
+   both platform gates must pass before manifest publication and tag promotion.
 4. Runs the candidate with a read-only root, no capabilities, and
    `no-new-privileges`, then verifies authenticated manifest/health responses
    and rejection of unauthenticated requests.

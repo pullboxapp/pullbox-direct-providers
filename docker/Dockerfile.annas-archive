@@ -25,6 +25,8 @@ RUN python -m pip wheel --wheel-dir /wheels ./packages/provider_contract && \
     python -m pip wheel --find-links /wheels --wheel-dir /wheels ./providers/annas_archive
 
 FROM security-patched AS runtime
+ARG PYTHON_BASE
+LABEL org.opencontainers.image.base.name="${PYTHON_BASE}"
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \

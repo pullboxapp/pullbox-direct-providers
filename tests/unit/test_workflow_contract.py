@@ -136,7 +136,7 @@ def test_container_security_builds_tests_and_scans_every_runtime_image() -> None
     assert set(jobs["multiarch-build"]["strategy"]["matrix"]["provider"]) == expected_providers
     assert "make docker-conformance" in text
     assert "make docker-source-smoke" in text
-    assert "anchore/scan-action@" in text
+    assert "install-grype.sh" in text
     assert "verify-container-vulnerability-baseline.py" in text
     assert "filter-reviewed-container-sarif.py" in text
     assert '--report "$GRYPE_REPORT"' in text
@@ -148,11 +148,11 @@ def test_container_security_builds_tests_and_scans_every_runtime_image() -> None
     assert "push=true" not in text
 
     steps = jobs["image-scan"]["steps"]
-    json_scan = next(step for step in steps if step.get("id") == "scan-json")
-    sarif_scan = next(step for step in steps if step.get("id") == "scan-sarif")
+    scan = next(step for step in steps if step.get("id") == "scan")
     sarif_upload = next(step for step in steps if step.get("name") == "Upload actionable SARIF")
-    assert json_scan["with"]["severity-cutoff"] == "negligible"
-    assert sarif_scan["with"]["severity-cutoff"] == "high"
+    assert "-o json=" in scan["run"] and "-o sarif=" in scan["run"]
+    assert set(jobs["image-scan"]["strategy"]["matrix"]["arch"]) == {"amd64", "arm64"}
+    assert '--platform "linux/${{ matrix.arch }}"' in text
     assert sarif_upload["with"]["sarif_file"].endswith("-actionable.sarif")
 
 
@@ -229,7 +229,7 @@ def test_provider_release_validates_before_tagging_and_preserves_supply_chain_da
         "prepare",
         "build-amd64",
         "build-arm64",
-        "validate-amd64",
+        "validate-candidate",
         "publish",
         "sign",
         "promote",
@@ -239,9 +239,14 @@ def test_provider_release_validates_before_tagging_and_preserves_supply_chain_da
         "prepare",
         "build-amd64",
         "build-arm64",
-        "validate-amd64",
+        "validate-candidate",
     }
     assert "verify-container-vulnerability-baseline.py" in text
+    validation = jobs["validate-candidate"]
+    assert set(validation["strategy"]["matrix"]["arch"]) == {"amd64", "arm64"}
+    assert set(validation["needs"]) == {"prepare", "build-amd64", "build-arm64"}
+    assert "matrix.arch == 'amd64'" in validation["env"]["CANDIDATE_IMAGE"]
+    assert '--platform "linux/${{ matrix.arch }}"' in yaml.safe_dump(validation)
     assert "linux/amd64" in text
     assert "linux/arm64" in text
     assert "provenance: mode=max" in text
@@ -347,3 +352,23 @@ def test_latest_reconciliation_is_serialized_and_idempotent_per_provider() -> No
     assert "docker buildx imagetools create" in text
     assert "github.event.client_payload.provider" in text
     assert LATEST_RELEASE_SELECTOR.exists()
+
+
+def test_published_image_scan_checks_both_platforms_without_rebuilding_or_publishing() -> None:
+    path = WORKFLOW_DIR / "published-container-security.yml"
+    assert path.exists()
+    workflow = _load_yaml(path)
+    text = path.read_text()
+    assert set(_triggers(workflow)) == {"schedule", "workflow_dispatch"}
+    job = workflow["jobs"]["published-scan"]
+    assert set(job["strategy"]["matrix"]["arch"]) == {"amd64", "arm64"}
+    assert set(job["strategy"]["matrix"]["provider"]) == {"getcomics", "annas-archive", "libgen"}
+    assert "packages: write" not in text
+    assert "docker build " not in text and "docker push" not in text
+    assert "select-latest-provider-release.py" in text
+    assert "imagetools inspect" in text
+    assert '--platform "linux/${{ matrix.arch }}"' in text
+    assert "@${digest}" in text
+    assert "verify-container-vulnerability-baseline.py" in text
+    assert "Preserve raw findings" in text
+    assert "published-${{ matrix.provider }}-${{ matrix.arch }}" in text

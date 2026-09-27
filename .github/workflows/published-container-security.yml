@@ -1,0 +1,104 @@
+name: Published Container Security
+
+on:
+  schedule:
+    - cron: "17 10 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: published-provider-security
+  cancel-in-progress: false
+
+jobs:
+  published-scan:
+    name: Scan published ${{ matrix.provider }} (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [getcomics, annas-archive, libgen]
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Select highest stable published release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release list --repo "${GITHUB_REPOSITORY}" --limit 1000 \
+            --json tagName,isDraft,isPrerelease > "${RUNNER_TEMP}/releases.json"
+          python .github/scripts/select-latest-provider-release.py \
+            --provider "${{ matrix.provider }}" \
+            --releases "${RUNNER_TEMP}/releases.json" \
+            --github-output "${GITHUB_OUTPUT}"
+      - name: Require a published release
+        if: steps.release.outputs.found != 'true'
+        run: |
+          echo "::error::No stable release found for this provider."
+          exit 1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Install pinned Grype
+        run: bash .github/scripts/install-grype.sh
+      - name: Resolve and pull immutable published image
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/pullbox-provider-${{ matrix.provider }}"
+          digest=$(docker buildx imagetools inspect "${image}:${VERSION}" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          if ! [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Invalid published image digest."
+            exit 1
+          fi
+          docker pull --platform "linux/${{ matrix.arch }}" "${image}@${digest}"
+          docker tag "${image}@${digest}" pullbox-published:scan
+          printf '%s\n' "${image}@${digest}" > "${RUNNER_TEMP}/published-image.txt"
+      - name: Scan published image
+        id: scan
+        run: |
+          grype docker:pullbox-published:scan \
+            -o json="${RUNNER_TEMP}/grype.json" \
+            -o sarif="${RUNNER_TEMP}/grype.sarif"
+      - name: Reject unreviewed High or Critical findings
+        run: |
+          python .github/scripts/verify-container-vulnerability-baseline.py \
+            --report "${RUNNER_TEMP}/grype.json" \
+            --baseline .github/security/container-vulnerability-baseline.json \
+            --image "${{ matrix.provider }}"
+      - name: Filter reviewed findings
+        id: filter
+        if: always() && steps.scan.outcome == 'success'
+        run: |
+          python .github/scripts/filter-reviewed-container-sarif.py \
+            --report "${RUNNER_TEMP}/grype.json" \
+            --sarif "${RUNNER_TEMP}/grype.sarif" \
+            --baseline .github/security/container-vulnerability-baseline.json \
+            --image "${{ matrix.provider }}" \
+            --output "${RUNNER_TEMP}/actionable.sarif"
+      - name: Preserve raw findings when the release is outside the review
+        if: always() && steps.scan.outcome == 'success' && steps.filter.outcome != 'success'
+        run: cp "${RUNNER_TEMP}/grype.sarif" "${RUNNER_TEMP}/actionable.sarif"
+      - name: Upload published image findings
+        if: always() && steps.scan.outcome == 'success'
+        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
+        with:
+          sarif_file: ${{ runner.temp }}/actionable.sarif
+          category: published-${{ matrix.provider }}-${{ matrix.arch }}
+      - name: Upload full reports and image identity
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: published-${{ matrix.provider }}-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/grype.*
+            ${{ runner.temp }}/published-image.txt
+          if-no-files-found: ignore
+          retention-days: 30
