@@ -13,10 +13,18 @@ from tests.conftest import TEST_TOKEN
 
 
 class _HealthSession:
-    def __init__(self, *, slow_fetch: bool = False, slow_close: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        slow_fetch: bool = False,
+        slow_close: bool = False,
+        close_release: asyncio.Event | None = None,
+    ) -> None:
         self.slow_fetch = slow_fetch
         self.slow_close = slow_close
+        self.close_release = close_release
         self.started = asyncio.Event()
+        self.close_started = asyncio.Event()
         self.fetch_count = 0
         self.fetch_cancelled = False
         self.close_called = False
@@ -39,9 +47,16 @@ class _HealthSession:
 
     async def aclose(self) -> None:
         self.close_called = True
+        self.close_started.set()
         if self.slow_close:
             try:
                 await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.close_cancelled = True
+                raise
+        if self.close_release is not None:
+            try:
+                await self.close_release.wait()
             except asyncio.CancelledError:
                 self.close_cancelled = True
                 raise
@@ -112,6 +127,25 @@ async def test_cancelling_health_cleans_up_all_probes(short_health_budget: None)
             await task
 
     assert all(session.fetch_cancelled and session.closed for session in sessions.values())
+
+
+async def test_cancelling_health_during_cleanup_allows_bounded_close_to_finish(
+    short_health_budget: None,
+) -> None:
+    close_release = asyncio.Event()
+    sessions = {origin: _HealthSession(close_release=close_release) for origin in KNOWN_SOURCE_URLS}
+    task = asyncio.create_task(_service(sessions).source_health())
+    await asyncio.wait_for(
+        asyncio.gather(*(session.close_started.wait() for session in sessions.values())), timeout=1
+    )
+
+    task.cancel()
+    await asyncio.sleep(0.01)
+    close_release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert all(session.closed and not session.close_cancelled for session in sessions.values())
 
 
 async def test_health_api_reports_healthy_process_when_all_mirrors_time_out(
