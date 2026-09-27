@@ -40,9 +40,25 @@ The pinned Python base image currently has reviewed upstream findings that are
 tracked in `.github/security/container-vulnerability-baseline.json`. The
 baseline is not a suppression of scanner output: new High or Critical findings
 fail CI, full reports remain available as CI artifacts, and every accepted
-entry requires a rationale and expiry date. Only unreviewed High or Critical
-findings are uploaded to the actionable GitHub code-scanning dashboard. Base
-image and dependency updates should remove entries as fixes become available.
+entry requires an owner, evidence link, rationale, review date, and expiry date.
+Acceptance is limited to the reviewed package version, ecosystem, advisory
+namespace, platform, and unfixed status. An available fix, changed package,
+expired review, or malformed report fails the gate. The image base label must
+match the reviewed digest; this is a build-consistency check, not attestation.
+
+Both AMD64 and ARM64 runtime images are scanned. JSON and SARIF come from one
+pinned Grype invocation. Only unreviewed High or Critical findings are uploaded
+to the actionable code-scanning dashboard when review metadata is valid; if it
+is invalid, the raw SARIF is uploaded instead. Full reports always remain CI
+artifacts. Base image and dependency updates should remove resolved entries.
+
+The weekly Published Container Security workflow separately pulls the highest
+stable release of each source provider by immutable digest and scans both
+platforms without rebuilding or publishing anything. Published releases outside
+the current reviewed base fail visibly; this deliberately catches the gap
+between patched source and images still in users' hands. Their findings use
+separate `published-<provider>-<arch>` categories. Merging a patch does not fix
+an already published image: a new release and user upgrades are still required.
 
 ## Release Integrity
 
