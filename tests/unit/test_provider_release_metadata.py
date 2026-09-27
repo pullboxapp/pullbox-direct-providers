@@ -17,9 +17,9 @@ def test_security_release_versions_and_bundled_libgen_dependency_agree() -> None
         for name in ("getcomics", "annas_archive", "libgen")
     }
     assert projects["getcomics"]["version"] == "1.0.3"
-    assert projects["annas_archive"]["version"] == "1.0.3"
-    assert projects["libgen"]["version"] == "1.0.1"
-    assert "pullbox-provider-libgen==1.0.1" in projects["annas_archive"]["dependencies"]
+    assert projects["annas_archive"]["version"] == "1.0.4"
+    assert projects["libgen"]["version"] == "1.0.2"
+    assert "pullbox-provider-libgen==1.0.2" in projects["annas_archive"]["dependencies"]
 
 
 def _load_module():
@@ -59,12 +59,12 @@ def test_tag_release_maps_getcomics_to_both_registry_names() -> None:
 def test_tag_release_maps_annas_archive_to_both_registry_names() -> None:
     release = _load_module().resolve_release(
         repository_owner="pullboxapp",
-        tag="annas-archive-v1.0.3",
+        tag="annas-archive-v1.0.4",
     )
 
     assert release.provider == "annas-archive"
-    assert release.version == "1.0.3"
-    assert release.release_tag == "annas-archive-v1.0.3"
+    assert release.version == "1.0.4"
+    assert release.release_tag == "annas-archive-v1.0.4"
     assert release.is_release is True
     assert release.is_prerelease is False
     assert release.dockerfile == "docker/Dockerfile.annas-archive"
@@ -75,12 +75,12 @@ def test_tag_release_maps_annas_archive_to_both_registry_names() -> None:
 def test_tag_release_maps_libgen_to_both_registry_names() -> None:
     release = _load_module().resolve_release(
         repository_owner="pullboxapp",
-        tag="libgen-v1.0.1",
+        tag="libgen-v1.0.2",
     )
 
     assert release.provider == "libgen"
-    assert release.version == "1.0.1"
-    assert release.release_tag == "libgen-v1.0.1"
+    assert release.version == "1.0.2"
+    assert release.release_tag == "libgen-v1.0.2"
     assert release.is_release is True
     assert release.is_prerelease is False
     assert release.dockerfile == "docker/Dockerfile.libgen"
