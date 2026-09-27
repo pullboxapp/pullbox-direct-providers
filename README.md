@@ -255,8 +255,8 @@ either registry; both names resolve to the same signed digest.
 | Provider | GHCR | Docker Hub |
 | --- | --- | --- |
 | GetComics | `ghcr.io/pullboxapp/pullbox-provider-getcomics:1.0.3` | `docker.io/pullbox/pullbox-provider-getcomics:1.0.3` |
-| Anna's Archive | `ghcr.io/pullboxapp/pullbox-provider-annas-archive:1.0.3` | `docker.io/pullbox/pullbox-provider-annas-archive:1.0.3` |
-| LibGen | `ghcr.io/pullboxapp/pullbox-provider-libgen:1.0.1` | `docker.io/pullbox/pullbox-provider-libgen:1.0.1` |
+| Anna's Archive | `ghcr.io/pullboxapp/pullbox-provider-annas-archive:1.0.4` | `docker.io/pullbox/pullbox-provider-annas-archive:1.0.4` |
+| LibGen | `ghcr.io/pullboxapp/pullbox-provider-libgen:1.0.2` | `docker.io/pullbox/pullbox-provider-libgen:1.0.2` |
 
 Pin a numbered version or the immutable digest in production. `latest` tracks
 only the newest stable provider release; prerelease and manual `edge` builds do
