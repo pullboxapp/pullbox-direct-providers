@@ -61,6 +61,7 @@ _SPECIAL_USE_SOURCE_SUFFIXES = (
 _MAX_METADATA_BYTES = 512 * 1024
 _SOURCE_HEALTH_TIMEOUT_SECONDS = 5.0
 _SOURCE_HEALTH_CLOSE_TIMEOUT_SECONDS = 1.0
+_DETACHED_HEALTH_CLOSE_TASKS: set[asyncio.Task[None]] = set()
 _LOGGER = structlog.get_logger(__name__)
 
 SourceResolver = Callable[[str, int], Awaitable[Sequence[str]]]
@@ -84,12 +85,14 @@ class LibGenSourceOriginError(ValueError):
 
 def _consume_health_close_result(task: asyncio.Task[None]) -> None:
     """Retrieve a detached close task's result without delaying health responses."""
+    _DETACHED_HEALTH_CLOSE_TASKS.discard(task)
     with suppress(asyncio.CancelledError, Exception):
         task.result()
 
 
 def _cancel_health_close_task(task: asyncio.Task[None]) -> None:
     """Cancel cleanup without trusting the transport to honor cancellation."""
+    _DETACHED_HEALTH_CLOSE_TASKS.add(task)
     task.cancel()
     task.add_done_callback(_consume_health_close_result)
 

@@ -153,6 +153,42 @@ async def test_source_health_does_not_wait_for_cleanup_that_suppresses_cancellat
     assert all(session.close_cancelled and session.closed for session in sessions.values())
 
 
+async def test_source_health_retains_detached_cleanup_until_completion(
+    short_health_budget: None,
+) -> None:
+    close_release = asyncio.Event()
+    sessions = {
+        origin: _HealthSession(
+            slow_close=True,
+            close_release=close_release,
+            suppress_close_cancellation=True,
+        )
+        for origin in KNOWN_SOURCE_URLS
+    }
+    task = asyncio.create_task(_service(sessions).source_health())
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*(session.close_started.wait() for session in sessions.values())),
+            timeout=1,
+        )
+        await asyncio.sleep(0.15)
+        assert task.done(), "Source health waited indefinitely for detached cleanup"
+        assert len(service_module._DETACHED_HEALTH_CLOSE_TASKS) == len(sessions)
+        assert all(
+            not close_task.done() for close_task in service_module._DETACHED_HEALTH_CLOSE_TASKS
+        )
+    finally:
+        close_release.set()
+        await asyncio.wait_for(task, timeout=1)
+        await asyncio.wait_for(
+            asyncio.gather(*(session.closed_event.wait() for session in sessions.values())),
+            timeout=1,
+        )
+
+    await asyncio.sleep(0)
+    assert not service_module._DETACHED_HEALTH_CLOSE_TASKS
+
+
 async def test_cancelling_health_cleans_up_all_probes(short_health_budget: None) -> None:
     sessions = {origin: _HealthSession(slow_fetch=True) for origin in KNOWN_SOURCE_URLS}
     task = asyncio.create_task(_service(sessions).source_health())
