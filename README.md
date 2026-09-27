@@ -84,17 +84,19 @@ Pull requests run four stable aggregate checks: `CI Required`,
 default permissions. The security gate includes Gitleaks, strict Python
 dependency auditing, Bandit, dependency review, and CodeQL's extended security
 queries scoped to shipped provider code. Container checks build and smoke-test
-all four runtime images, scan them with Grype, and prove Linux AMD64 and ARM64
-builds without publishing.
+all four runtime images, scan each Linux AMD64 and ARM64 build with Grype,
+and verify multi-platform packaging without publishing.
 
 High and Critical findings inherited from the pinned public Python base image
 are recorded in an expiring reviewed baseline under
 `.github/security/container-vulnerability-baseline.json`. New findings fail the
-build, removed findings disappear automatically, and the baseline must be
-reviewed before its expiry date. Complete scanner reports are retained as CI
-artifacts. Trusted runs upload only unreviewed High or Critical findings to
-GitHub Security, so the code-scanning dashboard stays actionable while the
-expiring baseline remains the audit trail for accepted upstream risk.
+build, and acceptance expires if a fix appears or package/platform identity
+changes. Every exception needs specific evidence, an owner, and a review
+deadline. Complete scanner reports are retained as CI artifacts. Trusted runs
+upload actionable findings to GitHub Security; invalid review metadata falls
+back to raw findings rather than hiding them. A separate weekly workflow scans
+the actual published stable images by digest on both architectures. See
+[Security Policy](SECURITY.md) for the review and release boundaries.
 
 Provider-prefixed semantic-version tags publish one signed provider image to
 both registries. The pipeline validates the candidate before creating runnable
@@ -246,9 +248,9 @@ either registry; both names resolve to the same signed digest.
 
 | Provider | GHCR | Docker Hub |
 | --- | --- | --- |
-| GetComics | `ghcr.io/pullboxapp/pullbox-provider-getcomics:1.0.2` | `docker.io/pullbox/pullbox-provider-getcomics:1.0.2` |
-| Anna's Archive | `ghcr.io/pullboxapp/pullbox-provider-annas-archive:1.0.2` | `docker.io/pullbox/pullbox-provider-annas-archive:1.0.2` |
-| LibGen | `ghcr.io/pullboxapp/pullbox-provider-libgen:1.0.0` | `docker.io/pullbox/pullbox-provider-libgen:1.0.0` |
+| GetComics | `ghcr.io/pullboxapp/pullbox-provider-getcomics:1.0.3` | `docker.io/pullbox/pullbox-provider-getcomics:1.0.3` |
+| Anna's Archive | `ghcr.io/pullboxapp/pullbox-provider-annas-archive:1.0.3` | `docker.io/pullbox/pullbox-provider-annas-archive:1.0.3` |
+| LibGen | `ghcr.io/pullboxapp/pullbox-provider-libgen:1.0.1` | `docker.io/pullbox/pullbox-provider-libgen:1.0.1` |
 
 Pin a numbered version or the immutable digest in production. `latest` tracks
 only the newest stable provider release; prerelease and manual `edge` builds do
