@@ -8,6 +8,7 @@ import re
 import socket
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextlib import suppress
 from typing import Protocol
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
@@ -58,6 +59,8 @@ _SPECIAL_USE_SOURCE_SUFFIXES = (
     "home.arpa",
 )
 _MAX_METADATA_BYTES = 512 * 1024
+_SOURCE_HEALTH_TIMEOUT_SECONDS = 5.0
+_SOURCE_HEALTH_CLOSE_TIMEOUT_SECONDS = 1.0
 _LOGGER = structlog.get_logger(__name__)
 
 SourceResolver = Callable[[str, int], Awaitable[Sequence[str]]]
@@ -77,6 +80,31 @@ SessionFactory = Callable[[str, ResolverProfile | None], SourceSession]
 
 class LibGenSourceOriginError(ValueError):
     """The configured LibGen source origin is unsafe or unavailable."""
+
+
+async def _close_health_session(session: SourceSession) -> bool:
+    """Close one health session within its budget, even if the request is cancelled."""
+    close_task = asyncio.create_task(session.aclose())
+    deadline = asyncio.get_running_loop().time() + _SOURCE_HEALTH_CLOSE_TIMEOUT_SECONDS
+    try:
+        try:
+            async with asyncio.timeout_at(deadline):
+                await asyncio.shield(close_task)
+        except asyncio.CancelledError:
+            try:
+                async with asyncio.timeout_at(deadline):
+                    await asyncio.shield(close_task)
+            except TimeoutError:
+                close_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await close_task
+            raise
+    except TimeoutError:
+        close_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await close_task
+        return False
+    return True
 
 
 async def validate_source_origin(
@@ -237,27 +265,37 @@ class LibGenProviderService:
         )
 
     async def source_health(self) -> dict[str, ProviderStatus]:
-        health: dict[str, ProviderStatus] = {}
-        for origin in KNOWN_SOURCE_URLS:
-            session = self._session_factory(origin, None)
-            try:
+        # Probe each fixed mirror once; a slow mirror must not delay the others.
+        async with asyncio.TaskGroup() as group:
+            probes = {
+                origin: group.create_task(self._source_health_probe(origin))
+                for origin in KNOWN_SOURCE_URLS
+            }
+        return {
+            urlsplit(origin).hostname or origin: task.result() for origin, task in probes.items()
+        }
+
+    async def _source_health_probe(self, origin: str) -> ProviderStatus:
+        session = self._session_factory(origin, None)
+        try:
+            async with asyncio.timeout(_SOURCE_HEALTH_TIMEOUT_SECONDS):
                 await session.fetch_text(f"{origin}/index.php")
-            except BrowserChallengeRequiredError:
-                status = ProviderStatus.CHALLENGE_REQUIRED
-            except LibGenSourceError as exc:
-                status = (
-                    ProviderStatus.RATE_LIMITED
-                    if exc.code == "source_rate_limited"
-                    else ProviderStatus.UNAVAILABLE
-                )
-            except ProviderResolverError:
+        except BrowserChallengeRequiredError:
+            status = ProviderStatus.CHALLENGE_REQUIRED
+        except LibGenSourceError as exc:
+            status = (
+                ProviderStatus.RATE_LIMITED
+                if exc.code == "source_rate_limited"
+                else ProviderStatus.UNAVAILABLE
+            )
+        except (ProviderResolverError, TimeoutError):
+            status = ProviderStatus.UNAVAILABLE
+        else:
+            status = ProviderStatus.HEALTHY
+        finally:
+            if not await _close_health_session(session):
                 status = ProviderStatus.UNAVAILABLE
-            else:
-                status = ProviderStatus.HEALTHY
-            finally:
-                await session.aclose()
-            health[urlsplit(origin).hostname or origin] = status
-        return health
+        return status
 
     async def search(
         self,
