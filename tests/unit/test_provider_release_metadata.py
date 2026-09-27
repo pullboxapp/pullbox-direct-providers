@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,17 @@ import pytest
 ROOT = Path(__file__).parents[2]
 SCRIPT = ROOT / ".github" / "scripts" / "resolve-provider-release.py"
 LATEST_SCRIPT = ROOT / ".github" / "scripts" / "select-latest-provider-release.py"
+
+
+def test_security_release_versions_and_bundled_libgen_dependency_agree() -> None:
+    projects = {
+        name: tomllib.loads((ROOT / "providers" / name / "pyproject.toml").read_text())["project"]
+        for name in ("getcomics", "annas_archive", "libgen")
+    }
+    assert projects["getcomics"]["version"] == "1.0.3"
+    assert projects["annas_archive"]["version"] == "1.0.3"
+    assert projects["libgen"]["version"] == "1.0.1"
+    assert "pullbox-provider-libgen==1.0.1" in projects["annas_archive"]["dependencies"]
 
 
 def _load_module():
@@ -31,12 +43,12 @@ def _load_latest_module():
 def test_tag_release_maps_getcomics_to_both_registry_names() -> None:
     release = _load_module().resolve_release(
         repository_owner="pullboxapp",
-        tag="getcomics-v1.0.2",
+        tag="getcomics-v1.0.3",
     )
 
     assert release.provider == "getcomics"
-    assert release.version == "1.0.2"
-    assert release.release_tag == "getcomics-v1.0.2"
+    assert release.version == "1.0.3"
+    assert release.release_tag == "getcomics-v1.0.3"
     assert release.is_release is True
     assert release.is_prerelease is False
     assert release.dockerfile == "docker/Dockerfile.getcomics"
@@ -47,12 +59,12 @@ def test_tag_release_maps_getcomics_to_both_registry_names() -> None:
 def test_tag_release_maps_annas_archive_to_both_registry_names() -> None:
     release = _load_module().resolve_release(
         repository_owner="pullboxapp",
-        tag="annas-archive-v1.0.2",
+        tag="annas-archive-v1.0.3",
     )
 
     assert release.provider == "annas-archive"
-    assert release.version == "1.0.2"
-    assert release.release_tag == "annas-archive-v1.0.2"
+    assert release.version == "1.0.3"
+    assert release.release_tag == "annas-archive-v1.0.3"
     assert release.is_release is True
     assert release.is_prerelease is False
     assert release.dockerfile == "docker/Dockerfile.annas-archive"
@@ -63,12 +75,12 @@ def test_tag_release_maps_annas_archive_to_both_registry_names() -> None:
 def test_tag_release_maps_libgen_to_both_registry_names() -> None:
     release = _load_module().resolve_release(
         repository_owner="pullboxapp",
-        tag="libgen-v1.0.0",
+        tag="libgen-v1.0.1",
     )
 
     assert release.provider == "libgen"
-    assert release.version == "1.0.0"
-    assert release.release_tag == "libgen-v1.0.0"
+    assert release.version == "1.0.1"
+    assert release.release_tag == "libgen-v1.0.1"
     assert release.is_release is True
     assert release.is_prerelease is False
     assert release.dockerfile == "docker/Dockerfile.libgen"
