@@ -40,7 +40,7 @@ def test_runtime_uses_pinned_python_314_and_non_root_identity() -> None:
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
 
     assert (
-        "python:3.14-slim@sha256:83ff1d245a3d57d04152252d3ef9cb361494d0b3395abd65a5ebe91c401c8e83"
+        "python:3.14-slim-trixie@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d"
         in dockerfile
     )
     assert "AS build" in dockerfile
@@ -79,8 +79,8 @@ def test_source_provider_images_are_self_contained_hardened_python_314_services(
         dockerfile = path.read_text(encoding="utf-8")
 
         assert (
-            "python:3.14-slim@sha256:"
-            "83ff1d245a3d57d04152252d3ef9cb361494d0b3395abd65a5ebe91c401c8e83" in dockerfile
+            "python:3.14-slim-trixie@sha256:"
+            "51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d" in dockerfile
         )
         assert "USER 65532:65532" in dockerfile
         assert "EXPOSE 8780" in dockerfile

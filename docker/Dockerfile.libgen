@@ -1,4 +1,4 @@
-ARG PYTHON_BASE=python:3.14-slim@sha256:83ff1d245a3d57d04152252d3ef9cb361494d0b3395abd65a5ebe91c401c8e83
+ARG PYTHON_BASE=python:3.14-slim-trixie@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d
 
 FROM ${PYTHON_BASE} AS security-patched
 
