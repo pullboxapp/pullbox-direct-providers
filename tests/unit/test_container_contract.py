@@ -40,7 +40,7 @@ def test_runtime_uses_pinned_python_314_and_non_root_identity() -> None:
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
 
     assert (
-        "python:3.14-slim-trixie@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d"
+        "python:3.14.8-slim-trixie@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170"
         in dockerfile
     )
     assert "AS build" in dockerfile
@@ -79,8 +79,8 @@ def test_source_provider_images_are_self_contained_hardened_python_314_services(
         dockerfile = path.read_text(encoding="utf-8")
 
         assert (
-            "python:3.14-slim-trixie@sha256:"
-            "51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d" in dockerfile
+            "python:3.14.8-slim-trixie@sha256:"
+            "a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170" in dockerfile
         )
         assert "USER 65532:65532" in dockerfile
         assert "EXPOSE 8780" in dockerfile
@@ -95,13 +95,14 @@ def test_source_provider_images_are_self_contained_hardened_python_314_services(
             assert all(source not in dockerfile for source in other_source_paths)
 
 
-def test_runtime_images_install_pinned_openssl_security_update() -> None:
+def test_runtime_images_install_pinned_openssl_and_pcre_security_updates() -> None:
     for path in ALL_RUNTIME_DOCKERFILES:
         dockerfile = path.read_text(encoding="utf-8")
 
-        assert "libssl3t64=3.5.7-1~deb13u2" in dockerfile
-        assert "openssl=3.5.7-1~deb13u2" in dockerfile
-        assert "openssl-provider-legacy=3.5.7-1~deb13u2" in dockerfile
+        assert "libssl3t64=3.5.7-1~deb13u3" in dockerfile
+        assert "openssl=3.5.7-1~deb13u3" in dockerfile
+        assert "openssl-provider-legacy=3.5.7-1~deb13u3" in dockerfile
+        assert "libpcre2-8-0=10.46-1~deb13u3" in dockerfile
         assert "rm -rf /var/lib/apt/lists/*" in dockerfile
 
 

@@ -1,11 +1,12 @@
-ARG PYTHON_BASE=python:3.14-slim-trixie@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d
+ARG PYTHON_BASE=python:3.14.8-slim-trixie@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
 FROM ${PYTHON_BASE} AS runtime
 
 RUN apt-get update && \
     apt-get install --yes --no-install-recommends \
-        libssl3t64=3.5.7-1~deb13u2 \
-        openssl=3.5.7-1~deb13u2 \
-        openssl-provider-legacy=3.5.7-1~deb13u2 && \
+        libssl3t64=3.5.7-1~deb13u3 \
+        openssl=3.5.7-1~deb13u3 \
+        openssl-provider-legacy=3.5.7-1~deb13u3 \
+        libpcre2-8-0=10.46-1~deb13u3 && \
     rm -rf /var/lib/apt/lists/*
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

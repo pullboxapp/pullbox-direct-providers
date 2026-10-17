@@ -12,6 +12,47 @@ from pullbox_provider_getcomics.service import GetComicsProviderService
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "getcomics"
 
 
+@pytest.mark.parametrize(
+    ("series", "year", "count", "target"),
+    [("House of M", 2005, 8, n) for n in (3, 7)]
+    + [("House of M \u2013 Masters of Evil", 2009, 4, n) for n in range(1, 5)],
+)
+async def test_house_of_m_search_and_resolve_preserve_pack_coverage(
+    series: str, year: int, count: int, target: int
+) -> None:
+    async def pages(url: str, **_kwargs: object) -> str:
+        if urlsplit(url).query:
+            return f"""<h1 class="search-title">Search Result</h1>
+              <article class="post-title"><a href="https://getcomics.org/marvel/pack/">
+                {series} #1 \u2013 {count} ({year})</a></article>"""
+        return f"""<section class="post-contents">
+          <p><strong>{series} #1-{count} Free Download</strong><br>
+            Language : English | Year : {year} | Size : 400 MB</p>
+          <a class="aio-red" title="DOWNLOAD NOW"
+            href="https://files.example.test/pack.cbz">DOWNLOAD NOW</a>
+          <a class="aio-blue" title="MEGA"
+            href="https://mega.nz/file/pack#key">MEGA</a></section>"""
+
+    service = GetComicsProviderService(page_fetcher=pages)
+    candidates = await service.search(
+        SearchIntent(
+            series_title=series,
+            normalized_title=series.casefold(),
+            issue_number=str(target),
+            year=year,
+        ),
+        limit=1,
+    )
+    expected = [str(n) for n in range(1, count + 1)]
+    assert candidates[0].parsed.issue_numbers == expected
+    artifacts = await service.resolve(candidates[0].provider_candidate_id)
+    assert len(artifacts) == 1
+    assert artifacts[0].coverage.issue_numbers == expected
+    assert artifacts[0].coverage.description == series
+    assert str(target) in artifacts[0].coverage.issue_numbers
+    assert [m.host_kind for m in artifacts[0].mirrors] == ["generic_https", "mega"]
+
+
 class _Pages:
     def __init__(self) -> None:
         self.urls: list[str] = []

@@ -13,6 +13,57 @@ from pullbox_provider_getcomics.parser import (
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "getcomics"
 
 
+@pytest.mark.parametrize("dash", ["-", "\u2013"])
+def test_download_suffix_keeps_adjacent_pack_groups_separate(dash: str) -> None:
+    html = f"""<section class="post-contents">
+      <h1>House of M #1-8 (2005)</h1>
+      <p>House of M #1{dash}4 Free Download</p>
+      <a class="aio-red" href="https://files.example.test/first.cbz">DOWNLOAD NOW</a>
+      <p>House of M #5{dash}8 Free Download</p>
+      <a class="aio-red" href="https://files.example.test/second.cbz">DOWNLOAD NOW</a>
+    </section>"""
+    artifacts = parse_release_html(html, source_url="https://getcomics.org/marvel/pack/")
+    assert [a.coverage.issue_numbers for a in artifacts] == [
+        ["1", "2", "3", "4"],
+        ["5", "6", "7", "8"],
+    ]
+    assert [len(a.mirrors) for a in artifacts] == [1, 1]
+
+
+@pytest.mark.parametrize(
+    "heading",
+    [
+        "House of M Free Download",
+        "House of M #1-8 Free Download unavailable",
+        "House of M #1-8 and other comics Free Download",
+    ],
+)
+def test_download_suffix_never_borrows_page_coverage(heading: str) -> None:
+    html = f"""<section class="post-contents"><h1>House of M #1-8 (2005)</h1>
+      <p>{heading}<br>Size : 400 MB</p>
+      <a class="aio-red" href="https://files.example.test/pack.cbz">DOWNLOAD NOW</a>
+    </section>"""
+    artifacts = parse_release_html(html, source_url="https://getcomics.org/marvel/pack/")
+    assert len(artifacts) == 1
+    assert artifacts[0].coverage.issue_numbers == []
+
+
+@pytest.mark.parametrize(
+    "heading",
+    [
+        "House of M Free Download",
+        "House of M #1-8 and other comics Free Download",
+    ],
+)
+def test_download_group_without_size_still_requires_its_own_issue_evidence(heading: str) -> None:
+    html = f"""<section class="post-contents"><h1>House of M #1-8 (2005)</h1>
+      <p>{heading}</p>
+      <a class="aio-red" href="https://files.example.test/pack.cbz">DOWNLOAD NOW</a>
+    </section>"""
+    artifacts = parse_release_html(html, source_url="https://getcomics.org/marvel/pack/")
+    assert artifacts[0].coverage.issue_numbers == []
+
+
 def test_search_parser_normalizes_issue_and_collection_candidates() -> None:
     candidates = parse_search_html(
         (FIXTURES / "search-results.html").read_text(encoding="utf-8"),

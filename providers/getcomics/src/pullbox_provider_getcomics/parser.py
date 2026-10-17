@@ -22,6 +22,7 @@ from pullbox_provider_contract.models import (
 
 _SIZE = re.compile(r"\bSize\s*:\s*(\d+(?:\.\d+)?)\s*(KB|MB|GB)\b", re.IGNORECASE)
 _QUALITY_VARIANT = re.compile(r"\s*\((?:HD|SD)[-\s]*Digital\)\s*", re.IGNORECASE)
+_DOWNLOAD_SUFFIX = re.compile(r"\s+Free\s+Download\s*$", re.IGNORECASE)
 _CONTROL_PREFIX = re.compile(
     r"^(?:(?:DOWNLOAD NOW|READ ONLINE|PIXELDRAIN|MEGA|MEGANZ|ROOTZ|MEDIAFIRE|"
     r"TERABOX|DATANODES|VIKINGFILE)\s+)+",
@@ -201,7 +202,7 @@ def parse_release_html(
             continue
         group_text = " ".join(group.text_parts)
         title = _release_title(group.text_parts, source_url)
-        evidence = parse_comic_title(_QUALITY_VARIANT.sub(" ", title))
+        evidence = parse_comic_title(_DOWNLOAD_SUFFIX.sub("", _QUALITY_VARIANT.sub(" ", title)))
         size_bytes = _parse_size(group_text)
         artifacts.append(
             Artifact(
@@ -317,9 +318,10 @@ def _release_title(text_parts: list[str], source_url: str) -> str:
 
 
 def _looks_like_release_metadata(text: str) -> bool:
-    evidence = parse_comic_title(text)
+    evidence = parse_comic_title(_DOWNLOAD_SUFFIX.sub("", text))
     return bool(
-        _SIZE.search(text)
+        _DOWNLOAD_SUFFIX.search(text)
+        or _SIZE.search(text)
         or evidence.issue_numbers
         or evidence.volume
         or evidence.year is not None
