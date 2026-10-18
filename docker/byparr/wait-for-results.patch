@@ -1,0 +1,54 @@
+diff --git a/src/endpoints.py b/src/endpoints.py
+index 519ca23..9a16ee5 100644
+--- a/src/endpoints.py
++++ b/src/endpoints.py
+@@ -1,5 +1,6 @@
+ import time
+ import warnings
++from asyncio import sleep
+ from http import HTTPStatus
+ from typing import Annotated
+ 
+@@ -135,9 +136,19 @@ async def _navigate_and_solve(
+         state="domcontentloaded", timeout=remaining_ms(timer)
+     )
+ 
++    # DDoS-Guard clears through browser navigation, not the Cloudflare checkbox.
++    if (
++        (await dep.page.title()).strip().casefold() == "ddos-guard"
++        and "checking your browser" in (await dep.page.content()).casefold()
++    ):
++        await _wait_for_ddos_guard(dep, timer)
++        await dep.page.wait_for_load_state(
++            state="domcontentloaded", timeout=remaining_ms(timer)
++        )
++
+     if not await challenge_present(dep.page):
+-        page_html = await dep.page.content()
+         await _wait_for_networkidle(dep, timer)
++        page_html = await dep.page.content()
+         return False, page_html, page_request
+ 
+     await solve_challenge(dep.page, timer)
+@@ -145,6 +156,21 @@ async def _navigate_and_solve(
+     return True, page_html, page_request
+ 
+ 
++async def _wait_for_ddos_guard(dep: BrowserDep, timer: TimeoutTimer) -> None:
++    """Observe navigation without injecting scripts into the interstitial."""
++    while timer.remaining() > 0:
++        await sleep(min(0.25, timer.remaining()))
++        try:
++            title = (await dep.page.title()).strip().casefold()
++        except PlaywrightError as exc:
++            if "Execution context was destroyed" in str(exc):
++                continue
++            raise
++        if title and title != "ddos-guard" and not title.startswith("loading"):
++            return
++    raise TimeoutError("DDoS-Guard still present when the request budget ran out")
++
++
+ async def _wait_for_networkidle(dep: BrowserDep, timer: TimeoutTimer) -> None:
+     """Wait for network idle, tolerating post-DOM-load stalls."""
+     try:
