@@ -225,6 +225,87 @@ async def test_recognized_challenge_calls_trawl_scrape_for_trawl_profile() -> No
     assert result.solution.user_agent == "TRAWL Browser"
 
 
+@pytest.mark.parametrize("mode", ["flaresolverr_v1", "trawl_scrape"])
+@pytest.mark.parametrize("status", [200, 403])
+@pytest.mark.parametrize(
+    "html",
+    [
+        "<html><title>DDoS-Guard</title><h1>Checking your browser</h1></html>",
+        "<html><title>Just a moment...</title>"
+        "<script src='/cdn-cgi/challenge-platform/test'></script></html>",
+        '<html><form id="challenge-form">Enable JavaScript and cookies</form></html>',
+    ],
+)
+async def test_resolver_success_envelope_cannot_hide_an_unsolved_challenge(
+    mode: str,
+    status: int,
+    html: str,
+) -> None:
+    payload: dict[str, object] = (
+        {"url": "https://source.example/comics", "statusCode": status, "html": html}
+        if mode == "trawl_scrape"
+        else {
+            "status": "ok",
+            "solution": {
+                "url": "https://source.example/comics",
+                "status": status,
+                "response": html,
+            },
+        }
+    )
+    runtime = ProviderResolverRuntime(max_concurrency=1, failure_threshold=1)
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload))
+    ) as client:
+        with pytest.raises(ProviderResolverError) as caught:
+            await resolve_after_challenge(
+                OrdinaryHttpResponse(403, {"server": "ddos-guard"}, "Checking your browser"),
+                source_url="https://source.example/comics",
+                profile=_profile().model_copy(update={"mode": mode}),
+                http_client=client,
+                target_resolver=_resolve_public,
+                runtime=runtime,
+            )
+    assert caught.value.code == "resolver_challenge_failed"
+    assert html not in str(caught.value)
+    assert runtime.state == "open"
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        "<html><title>Comics</title>"
+        "<p>DDoS-Guard is checking your browser in this article.</p></html>",
+        "<html><title>Just a moment...</title><p>A comic title, not a challenge.</p></html>",
+        '<html><title>Search</title><form action="/search"></form><p>No results.</p></html>',
+    ],
+)
+async def test_resolved_source_pages_are_not_rejected_for_incidental_challenge_words(
+    html: str,
+) -> None:
+    payload = {
+        "status": "ok",
+        "solution": {
+            "url": "https://source.example/comics",
+            "status": 200,
+            "response": html,
+        },
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload))
+    ) as client:
+        result = await resolve_after_challenge(
+            OrdinaryHttpResponse(403, {"server": "ddos-guard"}, "Checking your browser"),
+            source_url="https://source.example/comics",
+            profile=_profile(),
+            http_client=client,
+            target_resolver=_resolve_public,
+            runtime=ProviderResolverRuntime(max_concurrency=1),
+        )
+    assert result is not None
+    assert result.solution.html == html
+
+
 @pytest.mark.parametrize(
     "source_url",
     [

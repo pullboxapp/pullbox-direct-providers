@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequenc
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
+from html.parser import HTMLParser
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -234,6 +235,48 @@ def detect_browser_challenge(
     return None
 
 
+class _ChallengePageParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.in_title = False
+        self.title: list[str] = []
+        self.challenge_form = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "title":
+            self.in_title = True
+        if tag == "form" and (dict(attrs).get("id") or "").casefold() == "challenge-form":
+            self.challenge_form = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "title":
+            self.in_title = False
+
+    def handle_data(self, data: str) -> None:
+        if self.in_title:
+            self.title.append(data)
+
+
+def _solution_still_has_challenge(html: str) -> bool:
+    # Solvers can return HTTP 200 for an interstitial. Require paired page markers,
+    # not incidental mentions of a challenge vendor in ordinary source content.
+    sample = html[:_CHALLENGE_BODY_LIMIT].casefold()
+    page = _ChallengePageParser()
+    page.feed(sample)
+    title = " ".join("".join(page.title).split())
+    return (
+        (title == "ddos-guard" and "checking your browser" in sample)
+        or (
+            title.startswith("just a moment")
+            and any(marker in sample for marker in ("cf-chl-", "/cdn-cgi/challenge-platform/"))
+        )
+        or (
+            page.challenge_form
+            and any(marker in sample for marker in ("enable javascript", "enable cookies"))
+        )
+    )
+
+
 async def resolve_after_challenge(
     response: OrdinaryHttpResponse,
     *,
@@ -401,6 +444,11 @@ async def _perform_resolution(
             "resolver_redirect_rejected",
             "Resolver returned a URL outside the declared source domains.",
         ) from exc
+    if _solution_still_has_challenge(solution_html):
+        raise ProviderResolverError(
+            "resolver_challenge_failed",
+            "Resolver returned an unsolved browser challenge.",
+        )
     return ProviderResolverOutcome(
         challenge=challenge,
         solution=ProviderResolverSolution(

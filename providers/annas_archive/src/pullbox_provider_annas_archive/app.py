@@ -29,6 +29,7 @@ from pullbox_provider_contract.models import (
 from pullbox_provider_contract.resolver import ProviderResolverError
 from pullbox_provider_contract.source_http import BrowserChallengeRequiredError
 
+from pullbox_provider_annas_archive.parser import AnnasArchiveLayoutError
 from pullbox_provider_annas_archive.service import (
     CATALOG_FALLBACK_DOMAINS,
     DEFAULT_OFFICIAL_URL,
@@ -168,6 +169,12 @@ def create_app(
                 503,
                 exc.code,
                 "Anna's Archive browser resolver attempt failed.",
+            ) from exc
+        except AnnasArchiveLayoutError as exc:
+            raise ProtocolError(
+                503,
+                "source_contract_changed",
+                "Anna's Archive search layout no longer matches the supported contract.",
             ) from exc
         except RuntimeError as exc:
             raise ProtocolError(

@@ -1,14 +1,25 @@
 from __future__ import annotations
 
+from functools import partial
 from typing import Any
 
 import httpx
 import pytest
 from fastapi import FastAPI
 from pullbox_provider_annas_archive.app import create_app
-from pullbox_provider_annas_archive.service import AnnasArchiveResolveResult
+from pullbox_provider_annas_archive.parser import AnnasArchiveLayoutError
+from pullbox_provider_annas_archive.service import (
+    AnnasArchiveProviderService,
+    AnnasArchiveResolveResult,
+)
 from pullbox_provider_contract.errors import ProtocolError
 from pullbox_provider_contract.models import Candidate, ParsedCandidate, QuotaStatus
+from pullbox_provider_contract.resolver import (
+    ProviderResolverError,
+    ProviderResolverRuntime,
+    resolve_after_challenge,
+)
+from pullbox_provider_contract.source_http import fetch_source_html
 
 from tests.conftest import TEST_TOKEN, resolve_payload, search_payload
 
@@ -213,6 +224,106 @@ async def test_anna_health_and_unexpected_source_errors_are_explicit_and_safe() 
         "message": "Anna's Archive is temporarily unavailable.",
     }
     assert MEMBER_SECRET not in failed.text
+
+
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [
+        (AnnasArchiveLayoutError(MEMBER_SECRET), "source_contract_changed"),
+        (
+            ProviderResolverError("resolver_challenge_failed", MEMBER_SECRET),
+            "resolver_challenge_failed",
+        ),
+        (RuntimeError(MEMBER_SECRET), "source_unavailable"),
+    ],
+)
+async def test_anna_search_preserves_distinct_safe_failure_classification(
+    error: Exception,
+    code: str,
+) -> None:
+    response = await _request(
+        _app(_AnnaService(error=error)),
+        "POST",
+        "/v1/search",
+        json=search_payload(),
+    )
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == code
+    assert MEMBER_SECRET not in response.text
+
+
+@pytest.mark.parametrize(
+    ("resolved_html", "expected_code"),
+    [
+        (
+            "<html><title>DDoS-Guard</title><h1>Checking your browser</h1></html>",
+            "resolver_challenge_failed",
+        ),
+        ("<html><title>New source layout</title></html>", "source_contract_changed"),
+    ],
+)
+async def test_anna_real_search_pipeline_preserves_primary_error_when_catalog_fallback_fails(
+    resolved_html: str,
+    expected_code: str,
+) -> None:
+    calls: list[str] = []
+
+    async def dns(_host: str, _port: int) -> list[str]:
+        return ["8.8.8.8"]
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        calls.append(request.method)
+        if request.method == "GET":
+            return httpx.Response(
+                403, headers={"server": "ddos-guard"}, text="Checking your browser"
+            )
+        return httpx.Response(
+            200,
+            json={
+                "status": "ok",
+                "solution": {
+                    "url": "https://annas-archive.gd/search",
+                    "status": 200,
+                    "response": resolved_html,
+                },
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as source_client:
+        service = AnnasArchiveProviderService(
+            page_fetcher=partial(
+                fetch_source_html,
+                http_client=source_client,
+                target_resolver=dns,
+                browser_resolver=partial(
+                    resolve_after_challenge,
+                    http_client=source_client,
+                    runtime=ProviderResolverRuntime(max_concurrency=1),
+                ),
+            ),
+            catalog_fallback=_AnnaService(
+                error=ProviderResolverError("resolver_target_rejected", MEMBER_SECRET)
+            ),
+        )
+        response = await _request(
+            create_app(bearer_token=TEST_TOKEN, service=service),
+            "POST",
+            "/v1/search",
+            json=search_payload(
+                resolver_profile={
+                    "endpoint": "http://resolver.test:8191",
+                    "mode": "flaresolverr_v1",
+                    "declared_domains": ["annas-archive.gd"],
+                    "timeout_seconds": 10,
+                    "max_concurrency": 1,
+                }
+            ),
+        )
+    assert calls == ["GET", "POST"]
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == expected_code
+    assert MEMBER_SECRET not in response.text
+    assert resolved_html not in response.text
 
 
 async def test_anna_health_reports_each_official_domain_independently() -> None:
