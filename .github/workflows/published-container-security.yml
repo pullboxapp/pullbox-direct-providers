@@ -45,7 +45,7 @@ jobs:
           echo "::error::No stable release found for this provider."
           exit 1
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Install pinned Grype
         run: bash .github/scripts/install-grype.sh
       - name: Resolve and pull immutable published image
@@ -88,13 +88,13 @@ jobs:
         run: cp "${RUNNER_TEMP}/grype.sarif" "${RUNNER_TEMP}/actionable.sarif"
       - name: Upload published image findings
         if: always() && steps.scan.outcome == 'success'
-        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           sarif_file: ${{ runner.temp }}/actionable.sarif
           category: published-${{ matrix.provider }}-${{ matrix.arch }}
       - name: Upload full reports and image identity
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: published-${{ matrix.provider }}-${{ matrix.arch }}
           path: |
