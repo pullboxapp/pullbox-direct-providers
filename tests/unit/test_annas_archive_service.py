@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -11,8 +12,10 @@ from pullbox_provider_annas_archive.service import (
     _fetch_fast_download,
     validate_official_domain,
 )
+from pullbox_provider_contract.api import within_deadline
 from pullbox_provider_contract.errors import ProtocolError
 from pullbox_provider_contract.models import Candidate, ParsedCandidate, SearchIntent
+from pullbox_provider_contract.resolver import ProviderResolverError
 from pullbox_provider_contract.source_http import BrowserChallengeRequiredError
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "annas_archive"
@@ -83,6 +86,41 @@ class _CatalogFallback:
         if self.error is not None:
             raise self.error
         return self.candidates
+
+
+@pytest.mark.parametrize("outcome", ["empty", "timeout", "success", "cancel"])
+async def test_catalog_fallback_cannot_hide_known_resolver_failure(outcome: str) -> None:
+    primary = ProviderResolverError("resolver_source_blocked", "DDoS-Guard remains blocked")
+
+    async def page(_url: str, **_kwargs: object) -> str:
+        raise primary
+
+    class Fallback(_CatalogFallback):
+        async def search(self, intent: SearchIntent, **kwargs: object) -> list[Candidate]:
+            if outcome == "timeout":
+                await asyncio.Event().wait()
+            if outcome == "cancel":
+                raise asyncio.CancelledError
+            return [_libgen_candidate()] if outcome == "success" else []
+
+    service = AnnasArchiveProviderService(page_fetcher=page, catalog_fallback=Fallback())
+    operation = within_deadline(
+        service.search(
+            SearchIntent(series_title="Example", normalized_title="example", issue_number="1"),
+            provider_config={},
+            limit=20,
+        ),
+        datetime.now(UTC) + timedelta(seconds=0.6),
+    )
+    if outcome == "success":
+        assert len(await operation) == 1
+    elif outcome == "cancel":
+        with pytest.raises(asyncio.CancelledError):
+            await operation
+    else:
+        with pytest.raises(ProviderResolverError) as exc:
+            await operation
+        assert exc.value is primary
 
 
 async def test_member_search_and_fast_resolve_use_secret_only_for_active_request() -> None:

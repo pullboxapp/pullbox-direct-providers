@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Protocol
 from urllib.parse import urlencode, urlsplit
 
 import httpx
+from pullbox_provider_contract.api import remaining_operation_seconds
 from pullbox_provider_contract.errors import ProtocolError
 from pullbox_provider_contract.models import (
     Artifact,
@@ -20,6 +21,7 @@ from pullbox_provider_contract.models import (
     QuotaStatus,
     SearchIntent,
 )
+from pullbox_provider_contract.resolver import ProviderResolverError
 from pullbox_provider_contract.search_terms import collection_title_fragment, is_collection_intent
 from pullbox_provider_contract.source_http import fetch_source_html
 from pullbox_provider_libgen.service import KNOWN_SOURCE_DOMAINS, LibGenProviderService
@@ -109,24 +111,33 @@ class AnnasArchiveProviderService:
             if candidates:
                 return candidates
 
+        fallback_seconds = None
+        if isinstance(primary_error, ProviderResolverError):
+            # Leave time to return the known failure instead of a generic outer timeout.
+            maximum = resolver_profile.timeout_seconds if resolver_profile else 30.0
+            fallback_seconds = max(0.0, remaining_operation_seconds(maximum) - 0.5)
         try:
-            catalog_candidates = await self._catalog_fallback.search(
-                intent,
-                provider_config={},
-                limit=limit,
-                resolver_profile=resolver_profile,
-            )
+            async with asyncio.timeout(fallback_seconds):
+                catalog_candidates = await self._catalog_fallback.search(
+                    intent,
+                    provider_config={},
+                    limit=limit,
+                    resolver_profile=resolver_profile,
+                )
         except asyncio.CancelledError:
             raise
-        except (RuntimeError, ValueError):
+        except (RuntimeError, ValueError, TimeoutError):
             if primary_error is not None:
                 raise primary_error from None
             return []
-        return _anna_candidates_from_catalog(
+        candidates = _anna_candidates_from_catalog(
             catalog_candidates,
             domain=domain,
             limit=limit,
         )
+        if not candidates and isinstance(primary_error, ProviderResolverError):
+            raise primary_error
+        return candidates
 
     async def resolve(
         self,

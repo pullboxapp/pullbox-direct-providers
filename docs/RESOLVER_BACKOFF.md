@@ -18,6 +18,9 @@ another origin does not clear this origin's backoff. No cookies are persisted.
 Anna's API preserves curated challenge, deadline, and backoff explanations. Raw
 upstream messages, credentials, cookies, and speculative IP-block claims are not
 returned to clients. Malformed error envelopes remain generic resolver failures.
+An unsuccessful LibGen catalog fallback cannot turn a known resolver failure into
+an empty success or a generic outer deadline. It reserves half a second to return
+the original failure; a successful catalog fallback remains available.
 
 ## Isolated TRAWL comparison, 2026-10-19
 
