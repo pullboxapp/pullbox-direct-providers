@@ -1,23 +1,47 @@
 diff --git a/src/endpoints.py b/src/endpoints.py
-index 519ca23..9a16ee5 100644
+index 519ca23..3f77c7f 100644
 --- a/src/endpoints.py
 +++ b/src/endpoints.py
-@@ -1,5 +1,6 @@
+@@ -1,7 +1,10 @@
  import time
  import warnings
 +from asyncio import sleep
++from html.parser import HTMLParser
  from http import HTTPStatus
  from typing import Annotated
++from urllib.parse import urlsplit
  
-@@ -135,9 +136,19 @@ async def _navigate_and_solve(
+ from fastapi import APIRouter, Depends, HTTPException
+ from fastapi.responses import RedirectResponse
+@@ -130,14 +133,38 @@ async def _navigate_and_solve(
+ ) -> tuple[bool, str | None, object]:
+     """Navigate to the URL, then solve a challenge or wait for network idle."""
+     page_html: str | None = None
+-    page_request = await dep.page.goto(request.url, timeout=remaining_ms(timer))
++    target = urlsplit(request.url)
++    anna_search = (
++        target.hostname in {"annas-archive.gd", "annas-archive.gl", "annas-archive.pk"}
++        and target.path == "/search"
++    )
++    page_request = await dep.page.goto(
++        request.url,
++        timeout=remaining_ms(timer),
++        wait_until="domcontentloaded" if anna_search else "load",
++    )
+     await dep.page.wait_for_load_state(
          state="domcontentloaded", timeout=remaining_ms(timer)
      )
  
++    if anna_search:
++        page_html = await _wait_for_anna_search(dep, timer)
++        return False, page_html, page_request
++
 +    # DDoS-Guard clears through browser navigation, not the Cloudflare checkbox.
 +    if (
-+        (await dep.page.title()).strip().casefold() == "ddos-guard"
-+        and "checking your browser" in (await dep.page.content()).casefold()
-+    ):
++        await dep.page.title()
++    ).strip().casefold() == "ddos-guard" and "checking your browser" in (
++        await dep.page.content()
++    ).casefold():
 +        await _wait_for_ddos_guard(dep, timer)
 +        await dep.page.wait_for_load_state(
 +            state="domcontentloaded", timeout=remaining_ms(timer)
@@ -30,10 +54,58 @@ index 519ca23..9a16ee5 100644
          return False, page_html, page_request
  
      await solve_challenge(dep.page, timer)
-@@ -145,6 +156,21 @@ async def _navigate_and_solve(
+@@ -145,6 +172,70 @@ async def _navigate_and_solve(
      return True, page_html, page_request
  
  
++class _AnnaSearchPage(HTMLParser):
++    def __init__(self) -> None:
++        super().__init__()
++        self.in_search_form = False
++        self.has_query = False
++        self.ready = False
++
++    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
++        values = dict(attrs)
++        if tag == "form":
++            self.in_search_form = values.get("action") == "/search"
++        if tag == "input" and self.in_search_form and values.get("name") == "q":
++            self.has_query = True
++
++    def handle_endtag(self, tag: str) -> None:
++        if tag == "form":
++            self.ready = self.ready or (self.in_search_form and self.has_query)
++            self.in_search_form = False
++
++
++async def _wait_for_anna_search(dep: BrowserDep, timer: TimeoutTimer) -> str:
++    """Wait for the source search shell, not an idle browser or a transient title."""
++    cloudflare_attempted = False
++    while timer.remaining() > 0:
++        try:
++            html = await dep.page.content()
++            title = (await dep.page.title()).strip().casefold()
++            page = _AnnaSearchPage()
++            page.feed(html)
++            if page.ready and "search" in title and not title.startswith("loading"):
++                return html
++            if (
++                not cloudflare_attempted
++                and title != "ddos-guard"
++                and not title.startswith("loading")
++                and await challenge_present(dep.page)
++            ):
++                cloudflare_attempted = True
++                await solve_challenge(dep.page, timer)
++                continue
++        except PlaywrightError as exc:
++            if "Execution context was destroyed" not in str(exc):
++                raise
++        await sleep(min(0.25, timer.remaining()))
++    message = "Anna search page was not ready before the request deadline"
++    raise TimeoutError(message)
++
++
 +async def _wait_for_ddos_guard(dep: BrowserDep, timer: TimeoutTimer) -> None:
 +    """Observe navigation without injecting scripts into the interstitial."""
 +    while timer.remaining() > 0:
@@ -46,7 +118,8 @@ index 519ca23..9a16ee5 100644
 +            raise
 +        if title and title != "ddos-guard" and not title.startswith("loading"):
 +            return
-+    raise TimeoutError("DDoS-Guard still present when the request budget ran out")
++    message = "DDoS-Guard still present when the request budget ran out"
++    raise TimeoutError(message)
 +
 +
  async def _wait_for_networkidle(dep: BrowserDep, timer: TimeoutTimer) -> None:

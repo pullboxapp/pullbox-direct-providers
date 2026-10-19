@@ -7,6 +7,7 @@ from pullbox_provider_annas_archive.parser import (
     AnnasArchiveLayoutError,
     parse_search_html,
 )
+from pullbox_provider_contract.resolver import ProviderResolverError
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "annas_archive"
 
@@ -41,3 +42,35 @@ def test_search_parser_rejects_non_md5_source_identity() -> None:
     """
 
     assert parse_search_html(html, source_domain="annas-archive.gd") == []
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        "<title>DDoS-Guard</title><p>Checking your browser</p>",
+        "<title>Loading https://annas-archive.gd/search?q=Batman</title>",
+    ],
+)
+def test_unfinished_search_page_is_retryable_not_a_layout_change(html: str) -> None:
+    with pytest.raises(ProviderResolverError) as exc:
+        parse_search_html(html, source_domain="annas-archive.gd")
+    assert exc.value.code == "resolver_challenge_failed"
+
+
+def test_unrecognized_page_diagnostics_do_not_log_source_text(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with pytest.raises(AnnasArchiveLayoutError):
+        parse_search_html(
+            "<title>private-query-token</title><body>cookie-secret</body>",
+            source_domain="annas-archive.gd",
+        )
+    assert "anna_search_page_unrecognized" in caplog.text
+    assert "private-query-token" not in caplog.text
+    assert "cookie-secret" not in caplog.text
+
+
+@pytest.mark.parametrize("title", ["Loading https://other.example/search", "Loading https://[bad"])
+def test_unrelated_loading_title_remains_an_unknown_layout(title: str) -> None:
+    with pytest.raises(AnnasArchiveLayoutError):
+        parse_search_html(f"<title>{title}</title>", source_domain="annas-archive.gd")

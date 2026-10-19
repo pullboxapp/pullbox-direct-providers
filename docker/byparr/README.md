@@ -19,7 +19,12 @@ docker run --rm -i --shm-size 512m --entrypoint /app/.venv/bin/python -e BROWSER
   pullbox-byparr-wait:local - < docker/byparr/test_browser_wait.py
 ```
 
-The six stdlib regression tests run during the build. The browser tests use
+Anna search requests now wait for the actual search form and query input, even
+when navigation starts on a Loading page. They do not wait for unrelated
+background network traffic once the search page is ready. Unknown pages still
+expire; this does not treat an error or challenge page as an empty search.
+
+The eleven stdlib regression tests run during the build. The browser tests use
 intercepted synthetic pages, not external catalogs. Live search checks remain
 separate. Before deployment compare image vulnerabilities to the exact base;
 existing risk in this resolver is separate from Pullbox/provider exceptions.

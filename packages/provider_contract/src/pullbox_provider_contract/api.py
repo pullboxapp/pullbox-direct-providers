@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Awaitable
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -18,6 +20,15 @@ from pullbox_provider_contract.models import PROTOCOL_VERSION
 
 _SECURITY = HTTPBearer(auto_error=False)
 MIN_BEARER_TOKEN_LENGTH = 32
+_OPERATION_EXPIRES: ContextVar[float | None] = ContextVar(
+    "provider_operation_expires", default=None
+)
+
+
+def remaining_operation_seconds(maximum: float) -> float:
+    """Share the caller's deadline with nested resolver work, not a fresh timeout."""
+    expires = _OPERATION_EXPIRES.get()
+    return maximum if expires is None else max(0.0, min(maximum, expires - time.monotonic()))
 
 
 class BearerAuthenticator:
@@ -83,6 +94,7 @@ async def within_deadline[Result](
     remaining = (deadline - datetime.now(UTC)).total_seconds()
     if remaining <= 0:
         raise ProtocolError(408, "deadline_exceeded", "The provider request deadline has passed.")
+    token = _OPERATION_EXPIRES.set(time.monotonic() + remaining_operation_seconds(remaining))
     try:
         async with asyncio.timeout(remaining):
             return await awaitable
@@ -92,6 +104,8 @@ async def within_deadline[Result](
             "deadline_exceeded",
             "The provider request deadline has passed.",
         ) from exc
+    finally:
+        _OPERATION_EXPIRES.reset(token)
 
 
 def error_response(

@@ -9,7 +9,7 @@ from src.endpoints import _navigate_and_solve
 from src.utils import TimeoutTimer
 
 CHALLENGE = "<title>DDoS-Guard</title><body>Checking your browser</body>"
-RESULTS = '<title>Batman - Search</title><form action="/search">Results</form>'
+RESULTS = '<title>Batman - Search</title><form action="/search"><input name="q">Results</form>'
 
 
 class WaitTests(unittest.IsolatedAsyncioTestCase):
@@ -80,6 +80,55 @@ class WaitTests(unittest.IsolatedAsyncioTestCase):
         ):
             detected, _, _ = await self.navigate()
         self.assertTrue(detected)
+        solver.assert_awaited_once()
+
+    async def test_anna_loading_shell_waits_even_without_initial_ddos_title(self):
+        self.request.url = "https://annas-archive.gd/search?q=Batman"
+        self.page.title.return_value = "Loading https://annas-archive.gd/search?q=Batman"
+        self.html = "<title>Loading https://annas-archive.gd/search?q=Batman</title>"
+        _, html, _ = await self.navigate()
+        self.assertEqual(html, RESULTS)
+        self.sleep.assert_awaited_once()
+
+    async def test_anna_search_form_does_not_wait_for_background_network_traffic(self):
+        self.request.url = "https://annas-archive.gd/search?q=Batman"
+        self.page.title.return_value = "Batman - Search"
+        self.html = RESULTS
+
+        async def load(state=None, **_kwargs):
+            if state == "networkidle":
+                self.fail("A ready search must not wait for unrelated page traffic")
+
+        self.page.wait_for_load_state.side_effect = load
+        _, html, _ = await self.navigate()
+        self.assertEqual(html, RESULTS)
+
+    async def test_anna_unknown_page_expires_instead_of_returning_success(self):
+        self.request.url = "https://annas-archive.gd/search?q=Batman"
+        self.page.title.return_value = "Error"
+        self.html = "<title>Error</title>"
+        timer = SimpleNamespace(remaining=Mock(side_effect=[30, 30, 0]))
+        with self.assertRaises(TimeoutError):
+            await _navigate_and_solve(self.dep, self.request, timer)
+
+    async def test_anna_loading_wait_can_be_cancelled(self):
+        self.request.url = "https://annas-archive.gd/search?q=Batman"
+        self.page.title.return_value = "Loading"
+        self.html = "<title>Loading</title>"
+        self.sleep.side_effect = asyncio.CancelledError
+        with self.assertRaises(asyncio.CancelledError):
+            await self.navigate()
+
+    async def test_anna_cloudflare_still_uses_the_existing_solver(self):
+        self.request.url = "https://annas-archive.gd/search?q=Batman"
+        self.page.title.return_value = "Just a moment..."
+        self.html = "<title>Just a moment...</title>"
+        with (
+            patch("src.endpoints.challenge_present", AsyncMock(return_value=True)),
+            patch("src.endpoints.solve_challenge", AsyncMock(side_effect=self.finish)) as solver,
+        ):
+            _, html, _ = await self.navigate()
+        self.assertEqual(html, RESULTS)
         solver.assert_awaited_once()
 
 

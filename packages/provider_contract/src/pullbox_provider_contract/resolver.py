@@ -17,6 +17,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from pullbox_provider_contract.api import remaining_operation_seconds
 from pullbox_provider_contract.models import ResolverProfile
 
 _CHALLENGE_BODY_LIMIT = 64 * 1024
@@ -104,6 +105,8 @@ class ProviderResolverRuntime:
         self._cooldown_seconds = cooldown_seconds
         self._clock = clock
         self._lock = asyncio.Lock()
+        self._available = asyncio.Condition(self._lock)
+        self._waiting = 0
         self._active = 0
         self._failures = 0
         self._state = "closed"
@@ -114,37 +117,60 @@ class ProviderResolverRuntime:
         return self._state
 
     @asynccontextmanager
-    async def slot(self) -> AsyncIterator[None]:
-        async with self._lock:
-            if self._state == "open":
-                opened_at = self._opened_at
-                if opened_at is None or self._clock() - opened_at < self._cooldown_seconds:
-                    raise ProviderResolverError(
-                        "resolver_circuit_open",
-                        "Resolver is temporarily unavailable while its circuit recovers.",
-                        retryable=True,
-                    )
-                self._state = "half_open"
-            if self._active >= self._max_concurrency or (
-                self._state == "half_open" and self._active > 0
-            ):
+    async def slot(self, *, wait_seconds: float = 0) -> AsyncIterator[None]:
+        queued = False
+        async with self._available:
+            try:
+                async with asyncio.timeout(wait_seconds if wait_seconds > 0 else None):
+                    while True:
+                        if self._state == "open":
+                            opened_at = self._opened_at
+                            if (
+                                opened_at is None
+                                or self._clock() - opened_at < self._cooldown_seconds
+                            ):
+                                raise ProviderResolverError(
+                                    "resolver_circuit_open",
+                                    "Resolver is temporarily unavailable "
+                                    "while its circuit recovers.",
+                                    retryable=True,
+                                )
+                            self._state = "half_open"
+                        if self._active < self._max_concurrency and not (
+                            self._state == "half_open" and self._active > 0
+                        ):
+                            break
+                        if wait_seconds <= 0 or (
+                            not queued and self._waiting >= self._max_concurrency * 4
+                        ):
+                            raise TimeoutError
+                        if not queued:
+                            self._waiting += 1
+                            queued = True
+                        await self._available.wait()
+            except TimeoutError as exc:
                 raise ProviderResolverError(
                     "resolver_busy",
                     "Resolver concurrency is currently full; retry later.",
                     retryable=True,
-                )
+                ) from exc
+            finally:
+                if queued:
+                    self._waiting -= 1
             self._active += 1
         try:
             yield
         finally:
             async with self._lock:
                 self._active -= 1
+                self._available.notify_all()
 
     async def record_success(self) -> None:
         async with self._lock:
             self._failures = 0
             self._opened_at = None
             self._state = "closed"
+            self._available.notify_all()
 
     async def record_failure(self) -> None:
         async with self._lock:
@@ -152,6 +178,7 @@ class ProviderResolverRuntime:
             if self._failures >= self._failure_threshold:
                 self._opened_at = self._clock()
                 self._state = "open"
+                self._available.notify_all()
 
 
 _RUNTIMES: dict[tuple[str, int, str], ProviderResolverRuntime] = {}
@@ -332,22 +359,43 @@ async def resolve_after_challenge(
         trust_env=False,
     )
     active_runtime = runtime or _runtime_for_profile(profile)
+    expires = time.monotonic() + remaining_operation_seconds(profile.timeout_seconds)
+    attempted = False
     try:
         try:
-            async with active_runtime.slot():
+            async with active_runtime.slot(
+                wait_seconds=min(10.0, max(0.0, expires - time.monotonic()) / 3),
+            ):
+                seconds = remaining_operation_seconds(expires - time.monotonic())
+                if seconds <= 0:
+                    raise ProviderResolverError(
+                        "resolver_timed_out", "Resolver request deadline expired.", retryable=True
+                    )
+                # Browser startup and response serialization must fit inside the HTTP budget.
+                browser_seconds = seconds - min(2.0, seconds / 5)
+                # Byparr interprets values below 1000 as seconds, not milliseconds.
+                if browser_seconds < 1:
+                    raise ProviderResolverError(
+                        "resolver_timed_out",
+                        "Too little time remains to start a browser.",
+                        retryable=True,
+                    )
+                payload["maxTimeout"] = int(browser_seconds * 1000)
+                bounded_profile = profile.model_copy(update={"timeout_seconds": seconds})
+                attempted = True
                 outcome = await _perform_resolution(
                     client=client,
                     endpoint=endpoint,
                     headers=headers,
                     payload=payload,
-                    profile=profile,
+                    profile=bounded_profile,
                     challenge=challenge,
                     target_resolver=target_resolver,
                 )
                 await active_runtime.record_success()
                 return outcome
         except ProviderResolverError as exc:
-            if exc.code not in {
+            if attempted and exc.code not in {
                 "resolver_busy",
                 "resolver_circuit_open",
                 "resolver_redirect_rejected",

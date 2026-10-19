@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
+from pullbox_provider_contract.api import within_deadline
 from pullbox_provider_contract.models import ResolverProfile
 from pullbox_provider_contract.resolver import (
     BrowserChallengeKind,
@@ -128,10 +131,11 @@ async def test_recognized_challenge_calls_standard_v1_once() -> None:
         calls += 1
         assert str(request.url) == "http://resolver:8191/v1"
         assert request.headers["Authorization"] == f"Bearer {AUTH_SECRET}"
-        assert json.loads(request.content) == {
+        payload = json.loads(request.content)
+        assert 57_000 < payload.pop("maxTimeout") <= 58_000
+        assert payload == {
             "cmd": "request.get",
             "url": "https://source.example/comics",
-            "maxTimeout": 60000,
         }
         return httpx.Response(200, json=_solution())
 
@@ -189,9 +193,10 @@ async def test_recognized_challenge_calls_trawl_scrape_for_trawl_profile() -> No
     def handler(request: httpx.Request) -> httpx.Response:
         assert str(request.url) == "http://resolver:8191/scrape"
         assert request.headers["Authorization"] == f"Bearer {AUTH_SECRET}"
-        assert json.loads(request.content) == {
+        payload = json.loads(request.content)
+        assert 57_000 < payload.pop("maxTimeout") <= 58_000
+        assert payload == {
             "url": "https://source.example/comics",
-            "maxTimeout": 60000,
             "skipHttp": True,
             "maxTier": 3,
         }
@@ -567,3 +572,169 @@ def test_provider_runtime_rejects_unbounded_or_invalid_limits(
 ) -> None:
     with pytest.raises(ValueError):
         ProviderResolverRuntime(**kwargs)
+
+
+async def test_busy_slot_waits_for_release_without_exceeding_concurrency() -> None:
+    runtime = ProviderResolverRuntime(max_concurrency=1)
+    started = asyncio.Event()
+    entered = asyncio.Event()
+
+    async def waiter() -> None:
+        started.set()
+        async with runtime.slot(wait_seconds=1):
+            entered.set()
+
+    async with runtime.slot():
+        task = asyncio.create_task(waiter())
+        await started.wait()
+        await asyncio.sleep(0)
+        assert not entered.is_set()
+        assert not task.done(), "An occupied slot must wait instead of failing immediately"
+    await task
+    assert entered.is_set()
+
+
+async def test_cancelled_slot_waiter_does_not_steal_or_leak_a_slot() -> None:
+    runtime = ProviderResolverRuntime(max_concurrency=1)
+    started = asyncio.Event()
+
+    async def waiter() -> None:
+        started.set()
+        async with runtime.slot(wait_seconds=1):
+            pytest.fail("The occupied slot was acquired")
+
+    async with runtime.slot():
+        task = asyncio.create_task(waiter())
+        await started.wait()
+        await asyncio.sleep(0)
+        assert not task.done()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    async with runtime.slot():
+        assert runtime.state == "closed"
+
+
+async def test_slot_wait_expiry_is_busy_not_a_circuit_failure() -> None:
+    runtime = ProviderResolverRuntime(max_concurrency=1)
+    async with runtime.slot():
+        with pytest.raises(ProviderResolverError) as exc:
+            async with runtime.slot(wait_seconds=0.01):
+                pytest.fail("The occupied slot was acquired")
+    assert exc.value.code == "resolver_busy"
+    assert runtime.state == "closed"
+
+
+async def test_resolver_uses_remaining_operation_time_and_reserves_response_time() -> None:
+    payloads: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payloads.append(json.loads(request.content)["maxTimeout"])
+        return httpx.Response(200, json=_solution())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+
+        async def work() -> object:
+            # Represents source HTTP and other work before the browser is admitted.
+            await asyncio.sleep(0.02)
+            return await resolve_after_challenge(
+                OrdinaryHttpResponse(
+                    status_code=403, headers={"server": "ddos-guard"}, body="Checking your browser"
+                ),
+                source_url="https://source.example/comics",
+                profile=_profile(),
+                http_client=client,
+                target_resolver=_resolve_public,
+                runtime=ProviderResolverRuntime(max_concurrency=1),
+            )
+
+        await within_deadline(work(), datetime.now(UTC) + timedelta(seconds=2))
+        assert 1000 <= payloads[0] < 1800, "The browser must not restart the original 60s budget"
+        await work()
+        assert 57_000 < payloads[1] <= 58_000, "Deadlines must not leak into later requests"
+
+
+async def test_subsecond_budget_does_not_start_a_long_byparr_request() -> None:
+    calls = 0
+    runtime = ProviderResolverRuntime(max_concurrency=1, failure_threshold=1)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json=_solution())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ProviderResolverError) as exc:
+            await resolve_after_challenge(
+                OrdinaryHttpResponse(
+                    status_code=403, headers={"server": "ddos-guard"}, body="Checking your browser"
+                ),
+                source_url="https://source.example/comics",
+                profile=_profile().model_copy(update={"timeout_seconds": 0.5}),
+                http_client=client,
+                target_resolver=_resolve_public,
+                runtime=runtime,
+            )
+    assert exc.value.code == "resolver_timed_out"
+    assert calls == 0
+    assert runtime.state == "closed"
+
+
+async def test_waiting_slot_rechecks_circuit_without_claiming_a_slot() -> None:
+    runtime = ProviderResolverRuntime(max_concurrency=1, failure_threshold=1)
+    started = asyncio.Event()
+
+    async def waiter() -> None:
+        started.set()
+        async with runtime.slot(wait_seconds=1):
+            pytest.fail("An open circuit admitted work")
+
+    async with runtime.slot():
+        task = asyncio.create_task(waiter())
+        await started.wait()
+        await asyncio.sleep(0)
+        assert not task.done()
+        await runtime.record_failure()
+        with pytest.raises(ProviderResolverError) as exc:
+            await task
+        assert exc.value.code == "resolver_circuit_open"
+
+
+async def test_queued_resolver_uses_only_time_left_after_slot_admission() -> None:
+    runtime = ProviderResolverRuntime(max_concurrency=1)
+    payloads: list[int] = []
+    ready = asyncio.Event()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payloads.append(json.loads(request.content)["maxTimeout"])
+        return httpx.Response(200, json=_solution())
+
+    async def public(host: str, port: int) -> Sequence[str]:
+        ready.set()
+        return await _resolve_public(host, port)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        async with runtime.slot():
+            task = asyncio.create_task(
+                within_deadline(
+                    resolve_after_challenge(
+                        OrdinaryHttpResponse(
+                            status_code=403,
+                            headers={"server": "ddos-guard"},
+                            body="Checking your browser",
+                        ),
+                        source_url="https://source.example/comics",
+                        profile=_profile(),
+                        http_client=client,
+                        target_resolver=public,
+                        runtime=runtime,
+                    ),
+                    datetime.now(UTC) + timedelta(seconds=2),
+                )
+            )
+            await ready.wait()
+            await asyncio.sleep(0.03)
+            assert not task.done()
+            assert not payloads
+        assert await task is not None
+    assert 1000 <= payloads[0] < 1580
