@@ -5,13 +5,16 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import math
 import socket
 import time
+from collections import OrderedDict
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
 from html.parser import HTMLParser
+from typing import Literal
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -22,6 +25,9 @@ from pullbox_provider_contract.models import ResolverProfile
 
 _CHALLENGE_BODY_LIMIT = 64 * 1024
 _MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+_SOURCE_FAILURE_THRESHOLD = 2
+_SOURCE_COOLDOWN_SECONDS = 300.0
+_MAX_SOURCE_BACKOFFS = 128
 _FORBIDDEN_HEADERS = frozenset(
     {
         "connection",
@@ -49,10 +55,52 @@ class BrowserChallengeKind(StrEnum):
 
 
 class ProviderResolverError(RuntimeError):
-    def __init__(self, code: str, message: str, *, retryable: bool = False) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        retryable: bool = False,
+        reason: str | None = None,
+        retry_after_seconds: int | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.retryable = retryable
+        self.reason = reason
+        self.retry_after_seconds = retry_after_seconds
+
+    @property
+    def public_message(self) -> str | None:
+        """Only curated categories can cross the provider API; never upstream prose."""
+        challenge = (
+            self.reason
+            if self.reason
+            in {"DDoS-Guard", "Cloudflare", "Imperva", "Akamai", "Anubis", "DataDome", "AWS WAF"}
+            else "the source's browser challenge"
+        )
+        if self.code == "resolver_source_blocked":
+            return (
+                f"TRAWL reached the source but could not clear {challenge}. "
+                "Other resolvers may still work."
+            )
+        if self.code == "resolver_source_backoff":
+            seconds = min(300, max(1, self.retry_after_seconds or 300))
+            failure = (
+                "exhausting its page-resolution deadline"
+                if self.reason == "browser_deadline"
+                else f"failing {challenge}"
+            )
+            return (
+                f"This resolver is temporarily paused for this source after {failure}. "
+                f"Retry in {seconds} seconds or use another resolver."
+            )
+        if self.code == "resolver_timed_out":
+            return (
+                "The resolver exhausted its page-resolution deadline. "
+                "Other resolvers may still work."
+            )
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,8 +133,18 @@ class ProviderResolverOutcome:
     solution: ProviderResolverSolution
 
 
+@dataclass(slots=True)
+class _SourceBackoff:
+    failures: int = 0
+    last_failure_at: float = 0
+    retry_at: float | None = None
+    probing: bool = False
+    message: str = "The browser challenge was not solved."
+    reason: str | None = None
+
+
 class ProviderResolverRuntime:
-    """Process-local fail-fast concurrency gate and circuit breaker."""
+    """Shared concurrency, endpoint circuit, and bounded source-specific backoff."""
 
     def __init__(
         self,
@@ -111,18 +169,35 @@ class ProviderResolverRuntime:
         self._failures = 0
         self._state = "closed"
         self._opened_at: float | None = None
+        self._sources: OrderedDict[str, _SourceBackoff] = OrderedDict()
 
     @property
     def state(self) -> str:
         return self._state
 
     @asynccontextmanager
-    async def slot(self, *, wait_seconds: float = 0) -> AsyncIterator[None]:
+    async def slot(
+        self, *, wait_seconds: float = 0, source_origin: str | None = None
+    ) -> AsyncIterator[None]:
         queued = False
+        source_probe: _SourceBackoff | None = None
         async with self._available:
             try:
                 async with asyncio.timeout(wait_seconds if wait_seconds > 0 else None):
                     while True:
+                        source = self._sources.get(source_origin) if source_origin else None
+                        if source is not None and source.retry_at is not None:
+                            if source.probing or self._clock() < source.retry_at:
+                                seconds = max(1, math.ceil(source.retry_at - self._clock()))
+                                raise ProviderResolverError(
+                                    "resolver_source_backoff",
+                                    f"{source.message} This resolver is temporarily paused for "
+                                    f"this source; retry in {seconds} seconds "
+                                    "or use another resolver.",
+                                    retryable=True,
+                                    reason=source.reason,
+                                    retry_after_seconds=seconds,
+                                )
                         if self._state == "open":
                             opened_at = self._opened_at
                             if (
@@ -139,6 +214,9 @@ class ProviderResolverRuntime:
                         if self._active < self._max_concurrency and not (
                             self._state == "half_open" and self._active > 0
                         ):
+                            if source is not None and source.retry_at is not None:
+                                source.probing = True
+                                source_probe = source
                             break
                         if wait_seconds <= 0 or (
                             not queued and self._waiting >= self._max_concurrency * 4
@@ -163,13 +241,42 @@ class ProviderResolverRuntime:
         finally:
             async with self._lock:
                 self._active -= 1
+                if source_probe is not None:
+                    source_probe.probing = False
                 self._available.notify_all()
 
-    async def record_success(self) -> None:
+    def _reset_endpoint_failure(self) -> None:
+        self._failures = 0
+        self._opened_at = None
+        self._state = "closed"
+
+    async def record_success(self, source_origin: str | None = None) -> None:
         async with self._lock:
-            self._failures = 0
-            self._opened_at = None
-            self._state = "closed"
+            self._reset_endpoint_failure()
+            if source_origin:
+                self._sources.pop(source_origin, None)
+            self._available.notify_all()
+
+    async def record_source_failure(self, source_origin: str, error: ProviderResolverError) -> None:
+        async with self._lock:
+            # A resolver that reports an unsolved challenge is reachable, not down.
+            self._reset_endpoint_failure()
+            source = self._sources.get(source_origin)
+            if source is None:
+                if len(self._sources) >= _MAX_SOURCE_BACKOFFS:
+                    oldest = next(key for key, value in self._sources.items() if not value.probing)
+                    del self._sources[oldest]
+                source = self._sources[source_origin] = _SourceBackoff()
+            now = self._clock()
+            if source.retry_at is None and now - source.last_failure_at >= _SOURCE_COOLDOWN_SECONDS:
+                source.failures = 0
+            source.failures += 1
+            source.last_failure_at = now
+            source.message = error.public_message or "The browser challenge was not solved."
+            source.reason = error.reason
+            if source.failures >= _SOURCE_FAILURE_THRESHOLD:
+                source.retry_at = now + _SOURCE_COOLDOWN_SECONDS
+            self._sources.move_to_end(source_origin)
             self._available.notify_all()
 
     async def record_failure(self) -> None:
@@ -218,6 +325,62 @@ class _TrawlResponseModel(BaseModel):
     html: str = Field(max_length=_MAX_RESPONSE_BYTES)
     cookies: list[_CookieModel] = Field(default_factory=list, max_length=200)
     user_agent: str | None = Field(default=None, alias="userAgent", max_length=2_000)
+
+
+class _TrawlFailureTiming(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    tier: int = Field(ge=1, le=4)
+    status: Literal["success", "blocked", "needs-js", "timeout", "error", "skipped"]
+    reason: str = Field(default="", max_length=2_000)
+
+
+class _TrawlFailureModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    timings: list[_TrawlFailureTiming] = Field(min_length=1, max_length=4)
+
+
+def _trawl_failure(content: bytes) -> ProviderResolverError | None:
+    try:
+        failure = _TrawlFailureModel.model_validate_json(content).timings[-1]
+    except ValidationError:
+        return None
+    if failure.status == "timeout":
+        return ProviderResolverError(
+            "resolver_timed_out",
+            "TRAWL exhausted its page-resolution deadline.",
+            retryable=True,
+            reason="browser_deadline",
+        )
+    if failure.status != "blocked":
+        return None
+    # Translate known markers, never echo arbitrary upstream text or claim an IP block.
+    challenge = "the source's browser challenge"
+    for marker, label in (
+        ("ddos-guard", "DDoS-Guard"),
+        ("cloudflare", "Cloudflare"),
+        ("imperva", "Imperva"),
+        ("akamai", "Akamai"),
+        ("anubis", "Anubis"),
+        ("datadome", "DataDome"),
+        ("aws-waf", "AWS WAF"),
+    ):
+        if failure.reason.casefold().startswith(marker) or (
+            marker == "ddos-guard"
+            and failure.reason.startswith(
+                "datacenter-ip-blocked (DDoS-Guard clearance cookie obtained"
+            )
+        ):
+            challenge = label
+            break
+    return ProviderResolverError(
+        "resolver_source_blocked",
+        f"TRAWL reached the source but could not clear {challenge}. "
+        "Other resolvers may still work.",
+        retryable=True,
+        reason=challenge,
+    )
 
 
 def detect_browser_challenge(
@@ -360,29 +523,31 @@ async def resolve_after_challenge(
     )
     active_runtime = runtime or _runtime_for_profile(profile)
     expires = time.monotonic() + remaining_operation_seconds(profile.timeout_seconds)
-    attempted = False
+    parsed = urlsplit(target_url)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    source_origin = f"{parsed.scheme}://{parsed.hostname}:{port}"
     try:
-        try:
-            async with active_runtime.slot(
-                wait_seconds=min(10.0, max(0.0, expires - time.monotonic()) / 3),
-            ):
-                seconds = remaining_operation_seconds(expires - time.monotonic())
-                if seconds <= 0:
-                    raise ProviderResolverError(
-                        "resolver_timed_out", "Resolver request deadline expired.", retryable=True
-                    )
-                # Browser startup and response serialization must fit inside the HTTP budget.
-                browser_seconds = seconds - min(2.0, seconds / 5)
-                # Byparr interprets values below 1000 as seconds, not milliseconds.
-                if browser_seconds < 1:
-                    raise ProviderResolverError(
-                        "resolver_timed_out",
-                        "Too little time remains to start a browser.",
-                        retryable=True,
-                    )
-                payload["maxTimeout"] = int(browser_seconds * 1000)
-                bounded_profile = profile.model_copy(update={"timeout_seconds": seconds})
-                attempted = True
+        async with active_runtime.slot(
+            wait_seconds=min(10.0, max(0.0, expires - time.monotonic()) / 3),
+            source_origin=source_origin,
+        ):
+            seconds = remaining_operation_seconds(expires - time.monotonic())
+            if seconds <= 0:
+                raise ProviderResolverError(
+                    "resolver_timed_out", "Resolver request deadline expired.", retryable=True
+                )
+            # Browser startup and response serialization must fit inside the HTTP budget.
+            browser_seconds = seconds - min(2.0, seconds / 5)
+            # Byparr interprets values below 1000 as seconds, not milliseconds.
+            if browser_seconds < 1:
+                raise ProviderResolverError(
+                    "resolver_timed_out",
+                    "Too little time remains to start a browser.",
+                    retryable=True,
+                )
+            payload["maxTimeout"] = int(browser_seconds * 1000)
+            bounded_profile = profile.model_copy(update={"timeout_seconds": seconds})
+            try:
                 outcome = await _perform_resolution(
                     client=client,
                     endpoint=endpoint,
@@ -392,17 +557,16 @@ async def resolve_after_challenge(
                     challenge=challenge,
                     target_resolver=target_resolver,
                 )
-                await active_runtime.record_success()
-                return outcome
-        except ProviderResolverError as exc:
-            if attempted and exc.code not in {
-                "resolver_busy",
-                "resolver_circuit_open",
-                "resolver_redirect_rejected",
-                "resolver_target_rejected",
-            }:
-                await active_runtime.record_failure()
-            raise
+            except ProviderResolverError as exc:
+                if exc.code in {"resolver_source_blocked", "resolver_challenge_failed"} or (
+                    exc.code == "resolver_timed_out" and exc.reason == "browser_deadline"
+                ):
+                    await active_runtime.record_source_failure(source_origin, exc)
+                elif exc.code not in {"resolver_redirect_rejected", "resolver_target_rejected"}:
+                    await active_runtime.record_failure()
+                raise
+            await active_runtime.record_success(source_origin)
+            return outcome
     finally:
         if owns_client:
             await client.aclose()
@@ -450,6 +614,17 @@ async def _perform_resolution(
         raise ProviderResolverError(
             "resolver_rate_limited", "Resolver is rate limited.", retryable=True
         )
+    if result.status_code == 408:
+        raise ProviderResolverError(
+            "resolver_timed_out",
+            "Resolver exhausted its page-resolution deadline.",
+            retryable=True,
+            reason="browser_deadline",
+        )
+    if result.status_code == 500 and profile.mode == "trawl_scrape":
+        failure = _trawl_failure(content)
+        if failure is not None:
+            raise failure
     if result.status_code >= 400:
         raise ProviderResolverError(
             "resolver_unavailable",

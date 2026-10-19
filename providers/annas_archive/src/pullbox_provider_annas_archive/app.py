@@ -168,7 +168,7 @@ def create_app(
             raise ProtocolError(
                 503,
                 exc.code,
-                "Anna's Archive browser resolver attempt failed.",
+                exc.public_message or "Anna's Archive browser resolver attempt failed.",
             ) from exc
         except AnnasArchiveLayoutError as exc:
             raise ProtocolError(
@@ -214,7 +214,7 @@ def create_app(
             raise ProtocolError(
                 503,
                 exc.code,
-                "Anna's Archive browser resolver attempt failed.",
+                exc.public_message or "Anna's Archive browser resolver attempt failed.",
             ) from exc
         except RuntimeError as exc:
             raise ProtocolError(

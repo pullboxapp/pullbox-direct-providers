@@ -273,7 +273,7 @@ async def test_resolver_success_envelope_cannot_hide_an_unsolved_challenge(
             )
     assert caught.value.code == "resolver_challenge_failed"
     assert html not in str(caught.value)
-    assert runtime.state == "open"
+    assert runtime.state == "closed", "An unsolved source challenge must not disable other sources"
 
 
 @pytest.mark.parametrize(

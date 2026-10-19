@@ -26,6 +26,26 @@ from tests.conftest import TEST_TOKEN, resolve_payload, search_payload
 MEMBER_SECRET = "member-secret-never-rendered"
 
 
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("resolver_source_blocked", "could not clear"),
+        ("resolver_source_backoff", "temporarily paused"),
+        ("resolver_timed_out", "deadline"),
+    ],
+)
+async def test_anna_keeps_safe_resolver_reason_in_api_response(code: str, expected: str) -> None:
+    response = await _request(
+        _app(_AnnaService(error=ProviderResolverError(code, MEMBER_SECRET))),
+        "POST",
+        "/v1/search",
+        json=search_payload(),
+    )
+    assert response.status_code == 503
+    assert expected in response.json()["error"]["message"]
+    assert MEMBER_SECRET not in response.text
+
+
 class _AnnaService:
     def __init__(
         self,
